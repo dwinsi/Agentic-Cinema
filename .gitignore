@@ -1,0 +1,31 @@
+# Virtual Environment
+venv/
+env/
+.venv/
+
+# Secrets and Service Account Keys
+agentic-cinema-key.json
+*.key
+.env
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE and OS files
+.DS_Store
+.vscode/
+.cache/
+.config/
+.docker/
+.gemini/
+.npm/
+
+# Cloud Shell temporary files
+.bash_history
+.bash_logout
+.bashrc
+.profile
+.sudo_as_admin_successful
+README-cloudshell.txt
