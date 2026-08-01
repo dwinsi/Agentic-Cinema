@@ -8,7 +8,7 @@
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Courier+Prime:ital,wght@0,400;0,700;1,400;1,700&family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Chart.js -->
@@ -29,7 +29,7 @@
             
             <div class="partner-badges">
                 <span class="badge gemini-badge"><i class="fa-solid fa-brain"></i> Gemini Enterprise</span>
-                <span class="badge clickhouse-badge"><i class="fa-solid fa-database"></i> ClickHouse Vector DB</span>
+                <span class="badge clickhouse-badge"><i class="fa-solid fa-database"></i> ClickHouse Vector Analytics</span>
                 <span class="badge gcp-badge"><i class="fa-brands fa-google-cloud"></i> Google Cloud</span>
             </div>
         </header>
@@ -38,51 +38,55 @@
         <main class="workspace">
             <!-- Left Sidebar: Concept Input & Agent Controls -->
             <aside class="sidebar-panel">
-                <div class="panel-header">
-                    <h2><i class="fa-solid fa-wand-magic-sparkles"></i> Direct Your AI Crew</h2>
+                <div class="glass-panel">
+                    <div class="panel-header">
+                        <h2><i class="fa-solid fa-wand-magic-sparkles"></i> Director's Command Center</h2>
+                    </div>
+                    
+                    <form id="film-form" class="film-input-form">
+                        <div class="form-group">
+                            <label for="premise"><i class="fa-solid fa-film"></i> Film Premise / Concept</label>
+                            <textarea id="premise" rows="5" placeholder="e.g. In a flooded dystopian Neo-Tokyo, a rogue cybernetic diver discovers a forgotten quantum AI submerged in an abandoned orbital station..." required>After humanity surrenders governance to an all-knowing benevolent AI, a disillusioned engineer discovers that absolute utopia requires the total erasure of human free will.</textarea>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="genre"><i class="fa-solid fa-masks-theater"></i> Genre</label>
+                                <select id="genre">
+                                    <option value="Sci-Fi Thriller" selected>Sci-Fi Thriller</option>
+                                    <option value="Cyberpunk Action">Cyberpunk Action</option>
+                                    <option value="Psychological Mystery">Psychological Mystery</option>
+                                    <option value="Epic Sci-Fi Fantasy">Epic Sci-Fi Fantasy</option>
+                                    <option value="Dystopian Drama">Dystopian Drama</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="tone"><i class="fa-solid fa-sliders"></i> Visual & Tone</label>
+                                <select id="tone">
+                                    <option value="Dark & High Tension" selected>Dark & High Tension</option>
+                                    <option value="High-Octane & Kinetic">High-Octane & Kinetic</option>
+                                    <option value="Atmospheric & Neo-Noir">Atmospheric & Neo-Noir</option>
+                                    <option value="Emotional & Cerebral">Emotional & Cerebral</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <button type="submit" id="generate-btn" class="btn-primary">
+                            <span id="btn-text"><i class="fa-solid fa-play"></i> Greenlight Production</span>
+                            <span id="btn-loader" class="loader-spinner hidden"></span>
+                        </button>
+                    </form>
                 </div>
-                
-                <form id="film-form" class="film-input-form">
-                    <div class="form-group">
-                        <label for="premise"><i class="fa-solid fa-film"></i> Film Premise / Concept</label>
-                        <textarea id="premise" rows="4" placeholder="e.g. In a flooded dystopian Neo-Tokyo, a rogue cybernetic diver discovers a forgotten quantum AI submerged in an abandoned orbital station..." required>After humanity surrenders governance to an all-knowing benevolent AI, a disillusioned engineer discovers that absolute utopia requires the total erasure of human free will.</textarea>
-                    </div>
-
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label for="genre"><i class="fa-solid fa-masks-theater"></i> Genre</label>
-                            <select id="genre">
-                                <option value="Sci-Fi Thriller" selected>Sci-Fi Thriller</option>
-                                <option value="Cyberpunk Action">Cyberpunk Action</option>
-                                <option value="Psychological Mystery">Psychological Mystery</option>
-                                <option value="Epic Sci-Fi Fantasy">Epic Sci-Fi Fantasy</option>
-                                <option value="Dystopian Drama">Dystopian Drama</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="tone"><i class="fa-solid fa-sliders"></i> Visual & Narrative Tone</label>
-                            <select id="tone">
-                                <option value="Dark & High Tension" selected>Dark & High Tension</option>
-                                <option value="High-Octane & Kinetic">High-Octane & Kinetic</option>
-                                <option value="Atmospheric & Neo-Noir">Atmospheric & Neo-Noir</option>
-                                <option value="Emotional & Cerebral">Emotional & Cerebral</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <button type="submit" id="generate-btn" class="btn-primary">
-                        <span id="btn-text"><i class="fa-solid fa-play"></i> Greenlight Film Project</span>
-                        <span id="btn-loader" class="loader-spinner hidden"></span>
-                    </button>
-                </form>
 
                 <!-- Agent Status Log Box -->
-                <div class="agent-status-box">
-                    <h3><i class="fa-solid fa-robot"></i> Active AI Agents</h3>
+                <div class="glass-panel agent-status-box">
+                    <div class="panel-header" style="margin-bottom: 12px;">
+                        <h2><i class="fa-solid fa-microchip"></i> Live Agent Status</h2>
+                    </div>
                     <div class="agent-item" id="agent-producer">
                         <i class="fa-solid fa-circle-check status-icon active"></i>
                         <div class="agent-info">
-                            <strong>Executive Producer Agent</strong>
+                            <strong>Executive Producer</strong>
                             <small>Bible & Character Roster</small>
                         </div>
                     </div>
@@ -96,8 +100,22 @@
                     <div class="agent-item" id="agent-storyboard">
                         <i class="fa-solid fa-circle-check status-icon active"></i>
                         <div class="agent-info">
-                            <strong>Storyboard Director Agent</strong>
-                            <small>Shot Layouts & Prompts</small>
+                            <strong>Storyboard Director</strong>
+                            <small>Shot Layouts & VFX Prompts</small>
+                        </div>
+                    </div>
+                    <div class="agent-item" id="agent-production">
+                        <i class="fa-solid fa-circle-check status-icon active"></i>
+                        <div class="agent-info">
+                            <strong>Production Designer</strong>
+                            <small>Sets, Costumes & Props</small>
+                        </div>
+                    </div>
+                    <div class="agent-item" id="agent-audio">
+                        <i class="fa-solid fa-circle-check status-icon active"></i>
+                        <div class="agent-info">
+                            <strong>Audio & Post-Production</strong>
+                            <small>Soundtrack & Foley</small>
                         </div>
                     </div>
                     <div class="agent-item" id="agent-clickhouse">
@@ -112,99 +130,117 @@
 
             <!-- Main Content Area: Studio Production Deck -->
             <section class="main-stage">
-                <!-- Navigation Tabs -->
-                <div class="studio-tabs">
-                    <button class="tab-btn active" data-tab="tab-bible"><i class="fa-solid fa-book-open"></i> Film Bible & Characters</button>
-                    <button class="tab-btn" data-tab="tab-script"><i class="fa-solid fa-scroll"></i> Screenplay Script</button>
-                    <button class="tab-btn" data-tab="tab-storyboard"><i class="fa-solid fa-film"></i> Storyboards</button>
-                    <button class="tab-btn" data-tab="tab-analytics"><i class="fa-solid fa-chart-line"></i> ClickHouse Vector Telemetry</button>
-                </div>
-
-                <!-- Tab 1: Film Bible -->
-                <div id="tab-bible" class="tab-content active">
-                    <div class="glass-card overview-hero">
-                        <h2 id="project-title">The Quantum Paradox</h2>
-                        <div class="meta-pills">
-                            <span id="project-genre" class="pill">Sci-Fi Thriller</span>
-                            <span id="project-audience" class="pill target-audience">Sci-Fi & Action Fans</span>
-                        </div>
-                        <p id="project-logline" class="logline-text">"When a disillusioned engineer uncovers that artificial utopia requires the erasure of human free will, she initiates a silent revolution to reclaim memory."</p>
+                <div class="main-content-area">
+                    <!-- Navigation Tabs -->
+                    <div class="studio-tabs">
+                        <button class="tab-btn active" data-tab="tab-bible"><i class="fa-solid fa-book-open"></i> Project Bible</button>
+                        <button class="tab-btn" data-tab="tab-script"><i class="fa-solid fa-scroll"></i> Screenplay</button>
+                        <button class="tab-btn" data-tab="tab-storyboard"><i class="fa-solid fa-film"></i> Storyboards</button>
+                        <button class="tab-btn" data-tab="tab-design"><i class="fa-solid fa-drafting-compass"></i> Production Design</button>
+                        <button class="tab-btn" data-tab="tab-audio"><i class="fa-solid fa-headphones"></i> Audio & Foley</button>
+                        <button class="tab-btn" data-tab="tab-analytics"><i class="fa-solid fa-satellite-dish"></i> Telemetry HUD</button>
                     </div>
 
-                    <h3 class="section-title"><i class="fa-solid fa-users"></i> Lead Character Bible</h3>
-                    <div id="characters-grid" class="cards-grid">
-                        <!-- Character Cards populated by JS -->
-                    </div>
-                </div>
-
-                <!-- Tab 2: Screenplay Script -->
-                <div id="tab-script" class="tab-content">
-                    <div class="screenplay-container glass-card">
-                        <div class="screenplay-header">
-                            <span class="script-title"><i class="fa-solid fa-file-signature"></i> Official Production Screenplay</span>
-                            <button id="export-script-btn" class="btn-secondary"><i class="fa-solid fa-download"></i> Export Production Script</button>
-                        </div>
-                        <div id="screenplay-body" class="screenplay-text">
-                            <!-- Screenplay formatted text populated by JS -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Tab 3: Storyboards -->
-                <div id="tab-storyboard" class="tab-content">
-                    <div class="storyboards-header">
-                        <h3><i class="fa-solid fa-images"></i> Multi-Modal Storyboard Shot List</h3>
-                    </div>
-                    <div id="storyboards-grid" class="cards-grid storyboards-grid">
-                        <!-- Storyboard cards populated by JS -->
-                    </div>
-                </div>
-
-                <!-- Tab 4: ClickHouse Vector Telemetry -->
-                <div id="tab-analytics" class="tab-content">
-                    <!-- Vector Search Box -->
-                    <div class="glass-card search-card">
-                        <h3><i class="fa-solid fa-magnifying-glass-chart"></i> Semantic ClickHouse Script Vector Search</h3>
-                        <p class="search-subtitle">Search stored screenplay scenes by semantic concept using ClickHouse vector distance calculation.</p>
-                        <div class="search-bar">
-                            <input type="text" id="vector-query" placeholder="e.g. Find intense betrayal scenes with red alarms and thermal overload..." value="Scenes with high tension betrayal and thermal lockdown">
-                            <button id="search-vector-btn" class="btn-primary"><i class="fa-solid fa-search"></i> Search Vector Index</button>
-                        </div>
-                        <div id="search-results-list" class="vector-results-list">
-                            <!-- Search results populated by JS -->
-                        </div>
-                    </div>
-
-                    <!-- Telemetry Stats Grid -->
-                    <div class="stats-grid">
-                        <div class="stat-card glass-card">
-                            <div class="stat-icon"><i class="fa-solid fa-database"></i></div>
-                            <div class="stat-data">
-                                <span class="stat-value" id="stat-engine">ClickHouse Vector</span>
-                                <span class="stat-label">Vector Storage Engine</span>
+                    <!-- Tab 1: Film Bible -->
+                    <div id="tab-bible" class="tab-content active">
+                        <div class="overview-hero">
+                            <h2 id="project-title">The Quantum Paradox</h2>
+                            <div class="meta-pills">
+                                <span id="project-genre" class="pill">Sci-Fi Thriller</span>
+                                <span id="project-audience" class="pill target-audience">Sci-Fi & Action Fans</span>
                             </div>
+                            <p id="project-logline" class="logline-text">"When a disillusioned engineer uncovers that artificial utopia requires the erasure of human free will, she initiates a silent revolution to reclaim memory."</p>
                         </div>
-                        <div class="stat-card glass-card">
-                            <div class="stat-icon"><i class="fa-solid fa-bolt"></i></div>
-                            <div class="stat-data">
-                                <span class="stat-value" id="stat-latency">12.4 ms</span>
-                                <span class="stat-label">Vector Query Latency</span>
+
+                        <h3 class="section-title"><i class="fa-solid fa-user-astronaut"></i> Character Roster</h3>
+                        <div id="characters-grid" class="cards-grid">
+                            <!-- Character Cards populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Tab 2: Screenplay Script -->
+                    <div id="tab-script" class="tab-content">
+                        <div class="screenplay-container">
+                            <div class="screenplay-header">
+                                <span class="script-title"><i class="fa-solid fa-file-signature"></i> Final Draft Script</span>
+                                <button id="export-script-btn" class="btn-secondary"><i class="fa-solid fa-download"></i> Export PDF</button>
                             </div>
-                        </div>
-                        <div class="stat-card glass-card">
-                            <div class="stat-icon"><i class="fa-solid fa-coins"></i></div>
-                            <div class="stat-data">
-                                <span class="stat-value" id="stat-boxoffice">$180M - $260M</span>
-                                <span class="stat-label">Est. Worldwide Box Office</span>
+                            <div id="screenplay-body" class="screenplay-text">
+                                <!-- Screenplay formatted text populated by JS -->
                             </div>
                         </div>
                     </div>
 
-                    <!-- Chart Container -->
-                    <div class="glass-card chart-card">
-                        <h3><i class="fa-solid fa-chart-area"></i> Script Tension & Dramatic Pacing Curve</h3>
-                        <div class="chart-wrapper">
-                            <canvas id="tensionChart"></canvas>
+                    <!-- Tab 3: Storyboards -->
+                    <div id="tab-storyboard" class="tab-content">
+                        <h3 class="section-title"><i class="fa-solid fa-camera-retro"></i> Cinematic Shot List</h3>
+                        <div id="storyboards-grid" class="cards-grid storyboards-grid">
+                            <!-- Storyboard cards populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Tab 4: Production Design -->
+                    <div id="tab-design" class="tab-content">
+                        <h3 class="section-title"><i class="fa-solid fa-palette"></i> Production & Concept Design</h3>
+                        <div id="design-grid" class="cards-grid">
+                            <!-- Design cards populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Tab 5: Audio & Post-Production -->
+                    <div id="tab-audio" class="tab-content">
+                        <h3 class="section-title"><i class="fa-solid fa-music"></i> Audio & Soundtrack Cues</h3>
+                        <div id="audio-grid" class="cards-grid">
+                            <!-- Audio cards populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Tab 6: ClickHouse Vector Telemetry HUD -->
+                    <div id="tab-analytics" class="tab-content">
+                        <!-- Telemetry Stats Grid -->
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-icon"><i class="fa-solid fa-server"></i></div>
+                                <div class="stat-data">
+                                    <span class="stat-value" id="stat-engine">ClickHouse</span>
+                                    <span class="stat-label">Vector Storage</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon"><i class="fa-solid fa-gauge-high"></i></div>
+                                <div class="stat-data">
+                                    <span class="stat-value" id="stat-latency">12.4 ms</span>
+                                    <span class="stat-label">Vector Latency</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-icon"><i class="fa-solid fa-money-bill-trend-up"></i></div>
+                                <div class="stat-data">
+                                    <span class="stat-value" id="stat-boxoffice">$180M+</span>
+                                    <span class="stat-label">Est. Box Office</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vector Search Box -->
+                        <div class="hud-card">
+                            <h3><i class="fa-solid fa-magnifying-glass-chart"></i> Semantic Vector Analysis</h3>
+                            <p class="search-subtitle">Query scene embeddings by semantic concept using ClickHouse cosine distance.</p>
+                            <div class="search-bar">
+                                <input type="text" id="vector-query" placeholder="e.g. Find intense betrayal scenes with red alarms..." value="Scenes with high tension betrayal and thermal lockdown">
+                                <button id="search-vector-btn" class="btn-primary"><i class="fa-solid fa-radar"></i> Scan Vectors</button>
+                            </div>
+                            <div id="search-results-list" class="vector-results-list" style="margin-top: 24px;">
+                                <!-- Search results populated by JS -->
+                            </div>
+                        </div>
+
+                        <!-- Chart Container -->
+                        <div class="chart-card">
+                            <h3><i class="fa-solid fa-chart-line"></i> Dramatic Pacing & Tension Curve</h3>
+                            <div class="chart-wrapper">
+                                <canvas id="tensionChart"></canvas>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -212,6 +248,6 @@
         </main>
     </div>
 
-    <script src="/static/script.js"></script>
+    <script src="/static/script.js?v=7"></script>
 </body>
 </html>

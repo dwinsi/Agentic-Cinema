@@ -6,6 +6,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
+import uuid
+from gtts import gTTS
+
 from agents.film_crew import film_crew
 from database.clickhouse_client import ch_manager
 
@@ -28,9 +31,23 @@ class FilmConceptRequest(BaseModel):
     genre: str = "Sci-Fi Thriller"
     tone: str = "Cinematic & High Tension"
 
+class ReviseSceneRequest(BaseModel):
+    film_bible: dict
+    scene: dict
+    notes: str
+
 class VectorSearchRequest(BaseModel):
     query: str
     limit: int = 3
+
+class TTSRequest(BaseModel):
+    text: str
+    character: str
+    voice_id: str = "en-US-Journey-D"
+    gender: str = "MALE"
+
+class GenerateImageRequest(BaseModel):
+    prompt: str
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
@@ -62,10 +79,16 @@ async def generate_film_project(req: FilmConceptRequest):
         # Step 3: Run Storyboard Director Agent
         storyboards = film_crew.run_storyboard_director(scenes)
 
-        # Step 4: Run Market Analyst Agent
+        # Step 4: Run Production Designer Agent
+        production_design = film_crew.run_production_designer(film_bible, scenes)
+
+        # Step 5: Run Audio & Post-Production Agent
+        audio_post = film_crew.run_audio_department(scenes)
+
+        # Step 6: Run Market Analyst Agent
         analytics = film_crew.run_market_analyst(film_bible, scenes)
 
-        # Step 5: Index Scenes into ClickHouse Vector Database
+        # Step 7: Index Scenes into ClickHouse Vector Database
         for idx, scene in enumerate(scenes):
             # Generate deterministic synthetic vector embedding for ClickHouse vector index demonstration
             vector = [0.1 * (idx + 1), 0.25, 0.45, 0.85, 0.35, 0.90, 0.15, 0.70]
@@ -85,12 +108,155 @@ async def generate_film_project(req: FilmConceptRequest):
                 "film_bible": film_bible,
                 "scenes": scenes,
                 "storyboards": storyboards,
+                "production_design": production_design,
+                "audio_post": audio_post,
                 "analytics": analytics,
                 "clickhouse_indexed_scenes": len(scenes)
             }
         })
     except Exception as e:
         logger.error(f"Error generating film project: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/revise-scene")
+async def revise_scene_endpoint(req: ReviseSceneRequest):
+    """
+    Interactive Storytelling: Rewrites a specific scene and regenerates its assets.
+    """
+    try:
+        # 1. Rewrite the scene
+        revised_scene = film_crew.revise_scene(req.film_bible, req.scene, req.notes)
+        
+        # 2. Regenerate assets for this single scene
+        single_scene_list = [revised_scene]
+        storyboards = film_crew.run_storyboard_director(single_scene_list)
+        production_design = film_crew.run_production_designer(req.film_bible, single_scene_list)
+        audio_post = film_crew.run_audio_department(single_scene_list)
+
+        # 3. Re-index in ClickHouse
+        idx = int(revised_scene.get("scene_id", "1").split("-")[-1]) if "-" in revised_scene.get("scene_id", "") else 1
+        vector = [0.1 * (idx + 1), 0.25, 0.45, 0.85, 0.35, 0.90, 0.15, 0.70]
+        ch_manager.insert_scene(
+            scene_id=revised_scene.get("scene_id", f"sc-{idx}"),
+            title=revised_scene.get("title", f"Scene {idx}"),
+            heading=revised_scene.get("heading", "INT. SET - DAY"),
+            description=revised_scene.get("description", ""),
+            tension=float(revised_scene.get("tension_score", 5.0)),
+            pacing=revised_scene.get("pacing_tag", "BUILD"),
+            vector=vector
+        )
+
+        return JSONResponse({
+            "status": "success",
+            "revised_scene": revised_scene,
+            "storyboard": storyboards[0] if storyboards else {},
+            "production_design": production_design[0] if production_design else {},
+            "audio_post": audio_post[0] if audio_post else {}
+        })
+    except Exception as e:
+        logger.error(f"Revise scene error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/tts")
+async def generate_tts(req: TTSRequest):
+    """Generates Text-to-Speech audio for dialogue using GCP TTS."""
+    try:
+        from google.cloud import texttospeech
+        
+        safe_char = "".join([c for c in req.character.lower() if c.isalnum() or c == ' ']).replace(' ', '_')
+        filename = f"{safe_char}_{uuid.uuid4().hex[:8]}.mp3"
+        
+        audio_dir = os.path.join(static_dir, "audio")
+        os.makedirs(audio_dir, exist_ok=True)
+        filepath = os.path.join(audio_dir, filename)
+        
+        client = texttospeech.TextToSpeechClient()
+        synthesis_input = texttospeech.SynthesisInput(text=req.text)
+        
+        ssml_gender = texttospeech.SsmlVoiceGender.MALE
+        if req.gender.upper() == "FEMALE":
+            ssml_gender = texttospeech.SsmlVoiceGender.FEMALE
+            
+        language_code = "-".join(req.voice_id.split("-")[:2]) if "-" in req.voice_id else "en-US"
+            
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=language_code,
+            name=req.voice_id,
+            ssml_gender=ssml_gender
+        )
+        
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3
+        )
+        
+        response = client.synthesize_speech(
+            input=synthesis_input, voice=voice, audio_config=audio_config
+        )
+        
+        with open(filepath, "wb") as out:
+            out.write(response.audio_content)
+
+        return JSONResponse({"status": "success", "audio_url": f"/static/audio/{filename}"})
+    except Exception as e:
+        logger.error(f"TTS generation error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/generate-image")
+async def generate_image(req: GenerateImageRequest):
+    """Generates a storyboard image using GCP Imagen 3 (with graceful fallback)."""
+    try:
+        from agents.film_crew import get_gemini_client
+        from google.genai import types
+        import urllib.request
+        
+        image_bytes = None
+        
+        try:
+            # Attempt GCP Imagen 3 via Vertex AI
+            client = get_gemini_client()
+            response = client.models.generate_images(
+                model='imagen-3.0-generate-001',
+                prompt=req.prompt + ", highly detailed cinematic storyboard sketch, masterpiece",
+                config=types.GenerateImagesConfig(
+                    number_of_images=1,
+                    output_mime_type="image/jpeg",
+                    aspect_ratio="16:9"
+                )
+            )
+            
+            if response.generated_images:
+                image_bytes = response.generated_images[0].image.image_bytes
+        except Exception as vertex_err:
+            logger.warning(f"Vertex AI Imagen failed (Likely missing quota/access). Falling back to Pollinations API. Error: {vertex_err}")
+        
+        # Fallback to Pollinations API if Vertex AI fails
+        if not image_bytes:
+            import urllib.parse
+            import random
+            safe_prompt = urllib.parse.quote(req.prompt + ", cinematic lighting, highly detailed storyboard sketch, masterpiece")
+            seed = random.randint(1, 1000000)
+            pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=450&nologo=true&seed={seed}"
+            
+            req_img = urllib.request.Request(pollinations_url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req_img) as response:
+                image_bytes = response.read()
+
+        if not image_bytes:
+            raise ValueError("All image generation methods failed.")
+            
+        safe_prompt = "".join([c for c in req.prompt[:20].lower() if c.isalnum()]).replace(' ', '_')
+        filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.jpg"
+        
+        img_dir = os.path.join(static_dir, "images", "storyboards")
+        os.makedirs(img_dir, exist_ok=True)
+        filepath = os.path.join(img_dir, filename)
+        
+        with open(filepath, "wb") as f:
+            f.write(image_bytes)
+            
+        return JSONResponse({"status": "success", "image_url": f"/static/images/storyboards/{filename}"})
+    except Exception as e:
+        logger.error(f"Image generation error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/vector-search")

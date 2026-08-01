@@ -28,7 +28,7 @@ class CineAgentFilmCrew:
     """
     def __init__(self):
         self.client = get_gemini_client()
-        self.model_name = "gemini-2.5-flash"
+        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
 
     def run_executive_producer(self, premise: str, genre: str, tone: str) -> Dict[str, Any]:
         """
@@ -46,7 +46,12 @@ class CineAgentFilmCrew:
         - "title": Compelling cinematic title
         - "logline": Short, high-concept logline (1-2 sentences)
         - "target_audience": Primary demographic
-        - "characters": Array of 3 key characters, each with "name", "role", and "archetype_description"
+        - "characters": Array of 3 key characters. Each MUST have:
+            - "name": Character name
+            - "role": Role in the story
+            - "archetype_description": Brief psychological profile
+            - "gender": "MALE" or "FEMALE"
+            - "voice_id": A valid Google Cloud TTS Voice Name appropriate for the character (e.g. "en-US-Journey-F", "en-US-Journey-D", "en-GB-Neural2-A", "en-GB-Neural2-B", "en-US-Neural2-F")
         - "act_outline": Array of 3 acts ("act_number", "title", "summary")
         
         Respond strictly with a valid JSON object. Do not include markdown code block formatting if possible.
@@ -169,6 +174,138 @@ class CineAgentFilmCrew:
                 "preview_color": "#00f2fe" if index % 2 == 0 else "#4facfe"
             })
         return storyboards
+
+    def run_production_designer(self, film_bible: Dict[str, Any], scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Production Design Agent:
+        Generates world-building concepts (Sets, Costumes, Props) based on the film bible and scenes.
+        """
+        title = film_bible.get("title", "Untitled Blockbuster")
+        prompt = f"""
+        You are an Oscar-winning Production Designer and Costume Designer for the film "{title}".
+        Review the film's premise and these scenes, then create a design concept for each scene.
+
+        Film Premise: {film_bible.get('logline', 'A cinematic adventure.')}
+
+        Scenes:
+        {json.dumps(scenes, indent=2)}
+
+        Generate a JSON array of design concepts, one for each scene, containing:
+        - "scene_id": Matching the input scene_id
+        - "set_design": A vivid description of the physical set, lighting, and architecture.
+        - "costume_notes": Key wardrobe choices for the characters in the scene.
+        - "key_prop": One important object/prop featured in the scene and its design.
+
+        Respond strictly with a valid JSON array.
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.8
+                )
+            )
+            if not response.text:
+                raise ValueError("Response text empty")
+            return json.loads(response.text)
+        except Exception as e:
+            logger.error(f"Production Designer Agent error: {e}")
+            return [
+                {
+                    "scene_id": s.get("scene_id", f"scene-{i}"),
+                    "set_design": "Industrial, brutalist architecture with flickering neon highlights and atmospheric fog.",
+                    "costume_notes": "Utilitarian tactical gear, distressed and weathered, with integrated augmented reality visors.",
+                    "key_prop": "A glowing, fragmented memory-drive containing the forbidden code."
+                } for i, s in enumerate(scenes)
+            ]
+
+    def run_audio_department(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Audio & Post-Production Agent:
+        Generates soundtrack themes, foley, and audio cues based on the pacing of the scenes.
+        """
+        prompt = f"""
+        You are a legendary Film Composer and Supervising Sound Editor.
+        Review the following scenes and their dramatic tension/pacing.
+
+        Scenes:
+        {json.dumps(scenes, indent=2)}
+        
+        Generate a JSON array of audio concepts, one for each scene, containing:
+        - "scene_id": Matching the input scene_id
+        - "soundtrack_theme": The musical score style, instrumentation, and emotion (e.g., "Heavy synth bass pulsing at 120bpm").
+        - "foley_effects": Specific sound effects to ground the scene (e.g., "Hissing steam, metallic clangs").
+        - "audio_cue": The primary sound that drives the tension in the scene.
+
+        Respond strictly with a valid JSON array.
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.75
+                )
+            )
+            if not response.text:
+                raise ValueError("Response text empty")
+            return json.loads(response.text)
+        except Exception as e:
+            logger.error(f"Audio Department Agent error: {e}")
+            return [
+                {
+                    "scene_id": s.get("scene_id", f"scene-{i}"),
+                    "soundtrack_theme": "Low, rumbling analog synth drones building to a chaotic crescendo." if s.get("pacing_tag") in ["SUSPENSE", "CLIMAX"] else "Ethereal, melancholic cello accompanied by sparse electronic beats.",
+                    "foley_effects": "Echoing footsteps on steel grating, distant sirens, low-frequency hum of failing generators.",
+                    "audio_cue": "A sudden, sharp blast of static cutting through the score."
+                } for i, s in enumerate(scenes)
+            ]
+    def revise_scene(self, film_bible: Dict[str, Any], original_scene: Dict[str, Any], directors_notes: str) -> Dict[str, Any]:
+        """
+        Interactive Storytelling: Rewrites a specific scene based on user feedback.
+        """
+        prompt = f"""
+        You are a master Screenwriter. The Director has reviewed the following scene from the film "{film_bible.get('title')}" and provided notes.
+        
+        Original Scene:
+        {json.dumps(original_scene, indent=2)}
+
+        Director's Notes (Feedback):
+        "{directors_notes}"
+
+        Rewrite the scene to perfectly incorporate the Director's Notes while maintaining the JSON schema structure.
+        Return ONLY a JSON object containing the revised scene:
+        - "scene_id": (Keep the original scene_id)
+        - "title": Revised scene title
+        - "heading": Revised slugline
+        - "description": Revised scene description
+        - "dialogues": Revised array of {{"character", "text", "parenthetical"}}
+        - "tension_score": Float 1-10
+        - "pacing_tag": e.g., SLOW, BUILD, ACTION
+
+        Respond strictly with a valid JSON object.
+        """
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.7
+                )
+            )
+            if not response.text:
+                raise ValueError("Response text empty")
+            return json.loads(response.text)
+        except Exception as e:
+            logger.error(f"Screenwriter Agent revise_scene error: {e}")
+            # Fallback
+            revised_scene = original_scene.copy()
+            revised_scene["description"] = f"[REVISED per Notes: {directors_notes}] " + original_scene.get("description", "")
+            return revised_scene
 
     def run_market_analyst(self, film_bible: Dict[str, Any], scenes: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
