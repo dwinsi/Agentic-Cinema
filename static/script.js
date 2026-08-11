@@ -1,5 +1,14 @@
 document.addEventListener("DOMContentLoaded", () => {
-    // DOM Elements
+
+    // ── State ──
+    let currentProject = null;
+    let tensionChart = null;
+    const AGENT_IDS = [
+        'agent-producer', 'agent-writer', 'agent-storyboard',
+        'agent-production', 'agent-audio', 'agent-clickhouse'
+    ];
+
+    // ── DOM References ──
     const filmForm = document.getElementById("film-form");
     const generateBtn = document.getElementById("generate-btn");
     const btnText = document.getElementById("btn-text");
@@ -25,21 +34,62 @@ document.addEventListener("DOMContentLoaded", () => {
     const statLatencyEl = document.getElementById("stat-latency");
     const statBoxofficeEl = document.getElementById("stat-boxoffice");
 
-    let tensionChart = null;
+    // ── Agent Status Helpers ──
+    function setAgentStatus(agentId, status) {
+        const item = document.getElementById(agentId);
+        if (!item) return;
+        item.classList.remove('idle', 'running', 'done');
+        item.classList.add(status);
+        const icon = item.querySelector('.status-icon');
+        if (!icon) return;
+        if (status === 'idle') {
+            icon.className = 'fa-regular fa-circle status-icon';
+        } else if (status === 'running') {
+            icon.className = 'fa-solid fa-spinner fa-spin status-icon';
+        } else if (status === 'done') {
+            icon.className = 'fa-solid fa-circle-check status-icon';
+        }
+    }
 
-    // Tab Switching Logic
+    function animateAgentsCrew() {
+        // Stagger agents lighting up one by one
+        const staggerMs = 850;
+        AGENT_IDS.forEach((id, i) => {
+            setTimeout(() => setAgentStatus(id, 'running'), i * staggerMs);
+        });
+    }
+
+    function completeAgentsCrew() {
+        AGENT_IDS.forEach(id => setAgentStatus(id, 'done'));
+    }
+
+    function resetAgentsCrew() {
+        AGENT_IDS.forEach(id => setAgentStatus(id, 'idle'));
+    }
+
+    // Set all to idle on page load
+    resetAgentsCrew();
+
+    // ── Tab Switching ──
     tabBtns.forEach(btn => {
         btn.addEventListener("click", () => {
             tabBtns.forEach(b => b.classList.remove("active"));
             tabContents.forEach(c => c.classList.remove("active"));
-
             btn.classList.add("active");
-            const tabId = btn.getAttribute("data-tab");
-            document.getElementById(tabId).classList.add("active");
+            document.getElementById(btn.getAttribute("data-tab")).classList.add("active");
         });
     });
 
-    // Handle Form Submit
+    function switchToTab(tabId) {
+        tabBtns.forEach(b => b.classList.remove("active"));
+        tabContents.forEach(c => c.classList.remove("active"));
+        const btn = document.querySelector(`[data-tab="${tabId}"]`);
+        if (btn) btn.classList.add("active");
+        const content = document.getElementById(tabId);
+        if (content) content.classList.add("active");
+    }
+
+    // ── Form Submit ──
     filmForm.addEventListener("submit", async (e) => {
         e.preventDefault();
 
@@ -47,10 +97,11 @@ document.addEventListener("DOMContentLoaded", () => {
         const genre = document.getElementById("genre").value;
         const tone = document.getElementById("tone").value;
 
-        // Loader UI
         btnText.classList.add("hidden");
         btnLoader.classList.remove("hidden");
         generateBtn.disabled = true;
+
+        animateAgentsCrew();
 
         try {
             const res = await fetch("/api/generate-film-project", {
@@ -61,32 +112,31 @@ document.addEventListener("DOMContentLoaded", () => {
 
             const data = await res.json();
             if (data.status === "success") {
+                completeAgentsCrew();
                 renderFilmProject(data.project);
+                switchToTab("tab-bible");
+            } else {
+                resetAgentsCrew();
+                alert("Generation failed. Please try again.");
             }
         } catch (err) {
             console.error("Error generating film project:", err);
-            alert("Failed to generate film project. Check console logs.");
+            resetAgentsCrew();
+            alert("Failed to generate the film project. Please check your connection and try again.");
         } finally {
             btnText.classList.remove("hidden");
             btnLoader.classList.add("hidden");
             generateBtn.disabled = false;
         }
-        generateBtn.innerHTML = '<i class="fa-solid fa-film"></i> Greenlight Production';
     });
 
-    // Feature Attachments
+    // ── Revision Listeners ──
     function attachRevisionListeners() {
         document.querySelectorAll(".revise-scene-btn").forEach(btn => {
             btn.addEventListener("click", (e) => {
                 const sid = e.target.closest("button").getAttribute("data-scene-id");
                 const revContainer = document.getElementById(`rev-${sid}`);
-                if (revContainer.classList.contains("hidden")) {
-                    revContainer.classList.remove("hidden");
-                    const submitBtn = revContainer.querySelector(".submit-revision-btn");
-                    submitBtn.innerText = "Rewrite";
-                } else {
-                    revContainer.classList.add("hidden");
-                }
+                if (revContainer) revContainer.classList.toggle("hidden");
             });
         });
 
@@ -94,9 +144,9 @@ document.addEventListener("DOMContentLoaded", () => {
             btn.addEventListener("click", async (e) => {
                 const sceneId = e.target.getAttribute("data-scene-id");
                 const notesInput = document.querySelector(`#rev-${sceneId} .revision-notes`);
-                const notes = notesInput.value;
-                if (!notes) {
-                    alert("Please enter revision notes!");
+                const notes = notesInput ? notesInput.value : "";
+                if (!notes.trim()) {
+                    alert("Please enter your director's notes first!");
                     return;
                 }
 
@@ -108,7 +158,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 try {
                     const sceneIndex = parseInt(sceneId);
                     const scene = currentProject.scenes[sceneIndex - 1];
-                    
+
                     const res = await fetch("/api/revise-scene", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
@@ -119,19 +169,19 @@ document.addEventListener("DOMContentLoaded", () => {
                         })
                     });
                     const data = await res.json();
-                    
+
                     if (data.status === "success") {
                         currentProject.scenes[sceneIndex - 1] = data.scene;
-                        renderFilmProject(currentProject); // Re-render the whole UI
-                        document.querySelector(`button[data-tab="tab-screenplay"]`).click();
+                        renderFilmProject(currentProject);
+                        switchToTab("tab-script");
                     } else {
-                        alert("Revision failed.");
+                        alert("Revision failed. Please try again.");
                         btnEl.innerText = originalText;
                         btnEl.disabled = false;
                     }
-                } catch(err) {
+                } catch (err) {
                     console.error(err);
-                    alert("Revision failed.");
+                    alert("Revision failed. Please try again.");
                     btnEl.innerText = originalText;
                     btnEl.disabled = false;
                 }
@@ -139,9 +189,10 @@ document.addEventListener("DOMContentLoaded", () => {
         });
     }
 
+    // ── TTS Listeners ──
     function attachTTSListeners() {
         document.querySelectorAll(".play-tts-btn").forEach(btn => {
-            // Remove existing listener to prevent duplicates on re-render
+            // Clone to remove stale listeners on re-render
             const newBtn = btn.cloneNode(true);
             btn.parentNode.replaceChild(newBtn, btn);
 
@@ -151,17 +202,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 const line = btnEl.getAttribute("data-line") || "";
 
                 const icon = btnEl.querySelector("i");
-                if (icon && icon.classList.contains("fa-spinner")) return; // already loading
+                if (icon && icon.classList.contains("fa-spinner")) return;
                 if (icon) icon.className = "fa-solid fa-spinner fa-spin";
 
-                // Unlock AudioContext on user gesture (required by Safari/Chrome autoplay policy)
+                // Unlock AudioContext for Safari/Chrome autoplay
                 try {
                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
                     if (ctx.state === "suspended") await ctx.resume();
                 } catch (_) {}
 
                 try {
-                    // Find character voice details safely
                     let voice_id = "en-US-Journey-D";
                     let gender = "MALE";
 
@@ -176,34 +226,31 @@ document.addEventListener("DOMContentLoaded", () => {
                     const res = await fetch("/api/tts", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ character: char, text: line, voice_id: voice_id, gender: gender })
+                        body: JSON.stringify({ character: char, text: line, voice_id, gender })
                     });
 
                     if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
-
                     const data = await res.json();
+
                     if (data.status === "success") {
-                        // Create a FRESH Audio object with the real URL — don't reuse the silent one
                         const realAudio = new Audio();
                         realAudio.preload = "auto";
                         realAudio.src = data.audio_url;
                         realAudio.load();
 
                         realAudio.oncanplaythrough = () => {
-                            realAudio.play().then(() => {
-                                if (icon) icon.className = "fa-solid fa-volume-high";
-                                realAudio.onended = () => { if (icon) icon.className = "fa-solid fa-play"; };
-                            }).catch(err => {
-                                console.error("Audio play() blocked:", err);
-                                if (icon) icon.className = "fa-solid fa-play";
-                                alert("Audio was blocked by browser autoplay policy. Try clicking the button again.");
-                            });
+                            realAudio.play()
+                                .then(() => {
+                                    if (icon) icon.className = "fa-solid fa-volume-high";
+                                    realAudio.onended = () => { if (icon) icon.className = "fa-solid fa-play"; };
+                                })
+                                .catch(err => {
+                                    console.error("Audio play() blocked:", err);
+                                    if (icon) icon.className = "fa-solid fa-play";
+                                    alert("Audio was blocked by the browser. Please click the button again.");
+                                });
                         };
-
-                        realAudio.onerror = (err) => {
-                            console.error("Audio load error:", err);
-                            if (icon) icon.className = "fa-solid fa-play";
-                        };
+                        realAudio.onerror = () => { if (icon) icon.className = "fa-solid fa-play"; };
                     } else {
                         if (icon) icon.className = "fa-solid fa-play";
                     }
@@ -214,74 +261,32 @@ document.addEventListener("DOMContentLoaded", () => {
             });
         });
     }
-    
-    async function generateStoryboardImage(prompt, index, shotType, regenBtn = null) {
-        const previewDiv = document.getElementById(`img-preview-${index}`);
-        if (!previewDiv) return;
-        
-        previewDiv.innerHTML = `
-            <i class="fa-solid fa-spinner fa-spin" style="font-size: 32px; color: var(--accent-cyan);"></i>
-            <span class="shot-tag">${shotType}</span>
-        `;
-        if (regenBtn) {
-            regenBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
-            regenBtn.disabled = true;
-        }
 
-        try {
-            const res = await fetch("/api/generate-image", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ prompt: prompt })
-            });
-            const data = await res.json();
-            
-            if (data.status === "success") {
-                previewDiv.innerHTML = `<span class="shot-tag">${shotType}</span>`;
-                previewDiv.style.backgroundImage = `url('${data.image_url}')`;
-                previewDiv.style.backgroundSize = "cover";
-                previewDiv.style.backgroundPosition = "center";
-            } else {
-                throw new Error("API failed");
-            }
-        } catch (e) {
-            console.error("Image gen failed", e);
-            previewDiv.innerHTML = `<i class="fa-solid fa-triangle-exclamation" style="color: red;"></i><br>Failed<span class="shot-tag">${shotType}</span>`;
-        } finally {
-            if (regenBtn) {
-                regenBtn.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i>';
-                regenBtn.disabled = false;
-            }
-        }
-    }
+    // Storyboard image generation is intentionally disabled.
+    // Cards show a cinematic placeholder with shot metadata instead.
 
-    function attachStoryboardListeners() {
-        document.querySelectorAll(".regen-img-btn").forEach(btn => {
-            btn.addEventListener("click", (e) => {
-                const btnEl = e.target.closest("button");
-                const index = btnEl.getAttribute("data-index");
-                const prompt = decodeURIComponent(btnEl.getAttribute("data-prompt"));
-                const shotType = btnEl.getAttribute("data-shot");
-                
-                generateStoryboardImage(prompt, index, shotType, btnEl);
-            });
-        });
-    }
-
-    // Render Film Project Data
+    // ── Main Render ──
     function renderFilmProject(project) {
+        currentProject = project;
+
         const bible = project.film_bible || {};
         const scenes = project.scenes || [];
         const storyboards = project.storyboards || [];
         const analytics = project.analytics || {};
 
-        // Update Overview
+        // Reveal content, hide empty state
+        const emptyState = document.getElementById("empty-state");
+        const bibleContent = document.getElementById("bible-content");
+        if (emptyState) emptyState.classList.add("hidden");
+        if (bibleContent) bibleContent.classList.remove("hidden");
+
+        // Overview
         projectTitleEl.textContent = bible.title || "Untitled Project";
         projectGenreEl.textContent = document.getElementById("genre").value;
         projectAudienceEl.textContent = bible.target_audience || "General Audience";
         projectLoglineEl.textContent = `"${bible.logline || ''}"`;
 
-        // Render Characters
+        // Characters
         charactersGrid.innerHTML = "";
         (bible.characters || []).forEach(c => {
             const card = document.createElement("div");
@@ -289,16 +294,16 @@ document.addEventListener("DOMContentLoaded", () => {
             card.innerHTML = `
                 <h4>${c.name}</h4>
                 <span class="role-tag">${c.role}</span>
-                <p>${c.archetype_description}</p>
-                <div style="margin-top: 15px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
-                    <p style="margin-bottom: 5px;"><strong><i class="fa-solid fa-shirt"></i> Costume:</strong> ${c.costume_design || 'Standard issued apparel.'}</p>
-                    <p style="margin-bottom: 0;"><strong><i class="fa-solid fa-microphone"></i> Voice Cast:</strong> ${c.gender || 'UNKNOWN'} (${c.voice_id || 'default'})</p>
+                <p style="font-size:13px;color:var(--text-secondary);line-height:1.55;">${c.archetype_description}</p>
+                <div class="char-detail">
+                    <p><strong><i class="fa-solid fa-shirt" style="color:var(--accent-gold);margin-right:4px;"></i>Costume:</strong> ${c.costume_design || 'Standard apparel.'}</p>
+                    <p><strong><i class="fa-solid fa-microphone" style="color:var(--accent-gold);margin-right:4px;"></i>Voice:</strong> ${c.gender || 'Unknown'} · ${c.voice_id || 'default'}</p>
                 </div>
             `;
             charactersGrid.appendChild(card);
         });
 
-        // Render Screenplay
+        // Screenplay
         screenplayBody.innerHTML = "";
         scenes.forEach(scene => {
             const block = document.createElement("div");
@@ -306,12 +311,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
             let dialoguesHtml = "";
             (scene.dialogue || []).forEach(d => {
-                const escapedLine = d.line.replace(/'/g, "&apos;").replace(/"/g, "&quot;");
+                const escapedLine = (d.line || "").replace(/'/g, "&apos;").replace(/"/g, "&quot;");
                 dialoguesHtml += `
                     <div class="dialogue-item">
                         <div class="dialogue-char">
-                            ${d.character} <span class="dialogue-emotion">(${d.emotion})</span>
-                            <button class="btn-primary play-tts-btn" data-char="${d.character}" data-line="${escapedLine}" style="padding: 2px 6px; font-size: 10px; margin-left: 10px; border-radius: 50%; width: 24px; height: 24px; display: inline-flex; align-items: center; justify-content: center;"><i class="fa-solid fa-play"></i></button>
+                            ${d.character}
+                            <span class="dialogue-emotion">(${d.emotion})</span>
+                            <button class="btn-tts play-tts-btn" data-char="${d.character}" data-line="${escapedLine}" title="Hear this line"><i class="fa-solid fa-play"></i></button>
                         </div>
                         <div class="dialogue-line">${d.line}</div>
                     </div>
@@ -319,124 +325,119 @@ document.addEventListener("DOMContentLoaded", () => {
             });
 
             block.innerHTML = `
-                <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                <div class="scene-revision-bar">
                     <div class="slugline">${scene.heading}</div>
-                    <button class="btn-primary revise-scene-btn" data-scene-id="${scene.scene_id}" style="padding: 5px 10px; font-size: 12px; background: rgba(0, 229, 255, 0.2);"><i class="fa-solid fa-pen-fancy"></i> Director's Cut</button>
+                    <button class="btn-directors-cut revise-scene-btn" data-scene-id="${scene.scene_id}">
+                        <i class="fa-solid fa-pen-fancy"></i> Director's Cut
+                    </button>
                 </div>
                 <div class="scene-desc">${scene.description}</div>
                 ${dialoguesHtml}
-                <div class="revision-container hidden" id="rev-${scene.scene_id}" style="margin-top: 15px; padding: 10px; background: rgba(0, 0, 0, 0.3); border-left: 2px solid var(--accent-cyan);">
-                    <input type="text" class="form-input revision-notes" placeholder="Director's Notes (e.g. 'Make it rain', 'Add more suspense')" style="width: 75%; display: inline-block;">
-                    <button class="btn-primary submit-revision-btn" data-scene-id="${scene.scene_id}" style="padding: 8px 12px; display: inline-block;">Rewriting...</button>
+                <div class="revision-container hidden" id="rev-${scene.scene_id}">
+                    <input type="text" class="revision-notes" placeholder="Your notes (e.g. 'More suspense, less dialogue')">
+                    <button class="btn-submit-revision submit-revision-btn" data-scene-id="${scene.scene_id}">Rewrite</button>
                 </div>
             `;
             screenplayBody.appendChild(block);
         });
 
-        // Render Storyboards (Lazy Loaded via GCP Imagen)
+        // Storyboards — static cinematic placeholder (no image generation API)
         storyboardsGrid.innerHTML = "";
-        storyboards.forEach((sb, index) => {
+        storyboards.forEach((sb) => {
             const card = document.createElement("div");
             card.className = "storyboard-card";
             card.innerHTML = `
-                <div class="storyboard-preview" id="img-preview-${index}" style="background: #111; display: flex; align-items: center; justify-content: center; min-height: 200px; position: relative;">
-                    <i class="fa-solid fa-spinner fa-spin" style="font-size: 32px; color: var(--accent-cyan);"></i>
+                <div class="storyboard-preview storyboard-placeholder">
+                    <i class="fa-solid fa-film storyboard-placeholder-icon"></i>
                     <span class="shot-tag">${sb.shot_type}</span>
                 </div>
-                <div class="storyboard-details" style="position: relative;">
+                <div class="storyboard-details">
                     <h4>${sb.title}</h4>
-                    <p class="prompt-text"><strong>Prompt:</strong> ${sb.image_prompt}</p>
-                    <button class="btn-primary regen-img-btn" data-index="${index}" data-prompt="${encodeURIComponent(sb.image_prompt)}" data-shot="${sb.shot_type}" style="position: absolute; right: 10px; top: 10px; padding: 5px; font-size: 14px; width: 30px; height: 30px; border-radius: 5px; background: rgba(255,255,255,0.1);"><i class="fa-solid fa-arrows-rotate"></i></button>
+                    <p class="prompt-text">${sb.image_prompt}</p>
                 </div>
             `;
             storyboardsGrid.appendChild(card);
-            
-            // Asynchronously fetch image
-            generateStoryboardImage(sb.image_prompt, index, sb.shot_type);
         });
 
-        // Render Production Design
+        // Production Design
         const designGrid = document.getElementById("design-grid");
         designGrid.innerHTML = "";
         (project.production_design || []).forEach((pd, index) => {
             const card = document.createElement("div");
-            card.className = "hud-card";
-            card.style.marginBottom = "20px";
+            card.className = "design-card";
             card.innerHTML = `
-                <h4><i class="fa-solid fa-building"></i> Scene ${index + 1} Set Design</h4>
-                <p style="margin-bottom: 10px;">${pd.set_design}</p>
-                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                <h4><i class="fa-solid fa-building"></i> Scene ${index + 1} — Set Design</h4>
+                <p class="card-body-text">${pd.set_design}</p>
+                <div class="card-section">
                     <div>
-                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Key Prop</strong>
-                        <p style="font-size: 14px; margin-top: 5px;">${pd.key_prop}</p>
+                        <div class="card-section-label">Key Prop</div>
+                        <p class="card-section-text">${pd.key_prop}</p>
                     </div>
                     <div>
-                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Wardrobe/Costume Notes</strong>
-                        <p style="font-size: 14px; margin-top: 5px;">${pd.costume_notes}</p>
+                        <div class="card-section-label">Costume Notes</div>
+                        <p class="card-section-text">${pd.costume_notes}</p>
                     </div>
                 </div>
             `;
             designGrid.appendChild(card);
         });
 
-        // Render Audio Post
+        // Audio
         const audioGrid = document.getElementById("audio-grid");
         audioGrid.innerHTML = "";
         (project.audio_post || []).forEach((ap, index) => {
             const card = document.createElement("div");
-            card.className = "hud-card";
-            card.style.marginBottom = "20px";
+            card.className = "audio-card";
             card.innerHTML = `
-                <h4><i class="fa-solid fa-headphones"></i> Scene ${index + 1} Audio Mix</h4>
-                <p style="margin-bottom: 10px; font-size: 14px;"><strong>Score Theme:</strong> ${ap.soundtrack_theme}</p>
-                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                <h4><i class="fa-solid fa-headphones"></i> Scene ${index + 1} — Audio Mix</h4>
+                <p class="card-body-text"><strong>Score:</strong> ${ap.soundtrack_theme}</p>
+                <div class="card-section">
                     <div>
-                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Foley & SFX</strong>
-                        <p style="font-size: 14px; margin-top: 5px;">${ap.foley_effects}</p>
+                        <div class="card-section-label">Foley &amp; SFX</div>
+                        <p class="card-section-text">${ap.foley_effects}</p>
                     </div>
                     <div>
-                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Primary Audio Cue</strong>
-                        <p style="font-size: 14px; margin-top: 5px;">${ap.audio_cue}</p>
+                        <div class="card-section-label">Primary Audio Cue</div>
+                        <p class="card-section-text">${ap.audio_cue}</p>
                     </div>
                 </div>
             `;
             audioGrid.appendChild(card);
         });
 
-        // Render Analytics & Stats
+        // Analytics stats
         statEngineEl.textContent = "ClickHouse Vector";
         statLatencyEl.textContent = "12.4 ms";
-        statBoxofficeEl.textContent = analytics.projected_box_office || "$180M - $260M";
+        statBoxofficeEl.textContent = analytics.projected_box_office || "$180M – $260M";
 
         renderTensionChart(scenes);
-        
         attachRevisionListeners();
         attachTTSListeners();
-        attachStoryboardListeners();
     }
 
-    // Render Tension Chart
+    // ── Tension Chart ──
     function renderTensionChart(scenes) {
         const ctx = document.getElementById("tensionChart").getContext("2d");
-        if (tensionChart) {
-            tensionChart.destroy();
-        }
+        if (tensionChart) tensionChart.destroy();
 
-        const labels = scenes.map((s, i) => s.title || `Scene ${i+1}`);
+        const labels = scenes.map((s, i) => s.title || `Scene ${i + 1}`);
         const dataPoints = scenes.map(s => s.tension_score || 5.0);
 
         tensionChart = new Chart(ctx, {
             type: "line",
             data: {
-                labels: labels,
+                labels,
                 datasets: [{
-                    label: "Scene Dramatic Tension (ClickHouse Telemetry)",
+                    label: "Dramatic Tension",
                     data: dataPoints,
-                    borderColor: "#00f2fe",
-                    backgroundColor: "rgba(0, 242, 254, 0.1)",
-                    borderWidth: 3,
+                    borderColor: "#f59e0b",
+                    backgroundColor: "rgba(245, 158, 11, 0.08)",
+                    borderWidth: 2.5,
                     fill: true,
-                    tension: 0.4
+                    tension: 0.4,
+                    pointBackgroundColor: "#f59e0b",
+                    pointRadius: 5,
+                    pointHoverRadius: 7
                 }]
             },
             options: {
@@ -444,29 +445,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 maintainAspectRatio: false,
                 scales: {
                     y: {
-                        min: 0,
-                        max: 10,
-                        grid: { color: "rgba(255, 255, 255, 0.05)" },
-                        ticks: { color: "#94a3b8" }
+                        min: 0, max: 10,
+                        grid: { color: "rgba(255, 240, 200, 0.05)" },
+                        ticks: { color: "#7a6a52" }
                     },
                     x: {
-                        grid: { color: "rgba(255, 255, 255, 0.05)" },
-                        ticks: { color: "#94a3b8" }
+                        grid: { color: "rgba(255, 240, 200, 0.05)" },
+                        ticks: { color: "#7a6a52", maxRotation: 30 }
                     }
                 },
                 plugins: {
-                    legend: { labels: { color: "#f0f4f8" } }
+                    legend: {
+                        labels: { color: "#b8a98a", font: { family: "'Inter', sans-serif", size: 12 } }
+                    }
                 }
             }
         });
     }
 
-    // Vector Search Button Handler
+    // ── Vector Search ──
     searchVectorBtn.addEventListener("click", async () => {
-        const query = vectorQueryInput.value;
+        const query = vectorQueryInput.value.trim();
         if (!query) return;
 
-        searchResultsList.innerHTML = "<p>Querying ClickHouse Vector Index...</p>";
+        searchResultsList.innerHTML = `<p style="color:var(--text-muted);font-size:13px;padding:8px 0;">Searching scenes...</p>`;
         try {
             const res = await fetch("/api/vector-search", {
                 method: "POST",
@@ -477,23 +479,29 @@ document.addEventListener("DOMContentLoaded", () => {
             const data = await res.json();
             if (data.status === "success") {
                 searchResultsList.innerHTML = "";
+                if (!data.results || data.results.length === 0) {
+                    searchResultsList.innerHTML = `<p style="color:var(--text-muted);font-size:13px;">No matching scenes found.</p>`;
+                    return;
+                }
                 data.results.forEach(r => {
                     const item = document.createElement("div");
                     item.className = "character-card";
-                    item.style.marginTop = "10px";
                     item.innerHTML = `
-                        <h4>${r.title} <small style="color:var(--accent-cyan); font-size:12px;">(Similarity: ${r.similarity_score})</small></h4>
+                        <h4 style="font-size:15px;">${r.title}
+                            <small style="color:var(--accent-gold);font-size:11px;font-weight:500;margin-left:6px;">
+                                ${Math.round((r.similarity_score || 0) * 100)}% match
+                            </small>
+                        </h4>
                         <span class="role-tag">${r.heading}</span>
-                        <p>${r.description}</p>
+                        <p style="font-size:13px;color:var(--text-secondary);line-height:1.5;">${r.description}</p>
                     `;
                     searchResultsList.appendChild(item);
                 });
             }
         } catch (err) {
             console.error("Vector search error:", err);
-            searchResultsList.innerHTML = "<p style='color:red;'>Vector search failed.</p>";
+            searchResultsList.innerHTML = `<p style="color:var(--accent-rose);font-size:13px;">Search failed. Please try again.</p>`;
         }
     });
 
-    // Initial Trigger removed - user must click Greenlight Production
 });

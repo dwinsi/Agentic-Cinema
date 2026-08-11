@@ -28,7 +28,7 @@ class CineAgentFilmCrew:
     """
     def __init__(self):
         self.client = get_gemini_client()
-        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
         
         # Strict safety guardrails for obscene language and explicit content
         self.safety_settings = [
@@ -70,19 +70,22 @@ class CineAgentFilmCrew:
         - Premise: {premise}
 
         Generate a complete Film Concept Bible in JSON format containing:
-        - "title": Compelling cinematic title
+        - "title": Compelling cinematic title (must feel authentic to the genre and tone)
         - "logline": Short, high-concept logline (1-2 sentences)
         - "target_audience": Primary demographic
-        - "characters": Array of 3 key characters. Each MUST have:
-            - "name": Character name
-            - "role": Role in the story
-            - "archetype_description": Brief psychological profile
-            - "costume_design": Visual description of their primary outfit and styling
+        - "genre": "{genre}"
+        - "tone": "{tone}"
+        - "characters": Array of ALL significant characters the story naturally requires (typically 3–7, but use as many as the premise demands). Each character MUST be DERIVED FROM THE PREMISE and have:
+            - "name": Character name that fits the genre and setting
+            - "role": Role in the story (e.g. Protagonist / Antagonist / Deuteragonist / Supporting / Mentor / Foil)
+            - "archetype_description": Psychological profile grounded in THIS specific story
+            - "costume_design": Visual outfit description that matches the genre ({genre}) and tone ({tone})
             - "gender": "MALE" or "FEMALE"
-            - "voice_id": A valid Google Cloud TTS Voice Name appropriate for the character (e.g. "en-US-Journey-F", "en-US-Journey-D", "en-GB-Neural2-A", "en-GB-Neural2-B", "en-US-Neural2-F")
-        - "act_outline": Array of 3 acts ("act_number", "title", "summary")
+            - "voice_id": A valid Google Cloud TTS Voice Name (e.g. "en-US-Journey-F", "en-US-Journey-D", "en-GB-Neural2-A", "en-GB-Neural2-B", "en-US-Neural2-F")
+        - "act_outline": Array of 3 acts ("act_number", "title", "summary") following the {tone} tone
         
-        Respond strictly with a valid JSON object. Do not include markdown code block formatting if possible.
+        IMPORTANT: Characters must be original and specific to the given premise. Do NOT use generic placeholder names. Include every character who has meaningful story impact — do not artificially limit to 3.
+        Respond strictly with a valid JSON object. Do not include markdown code block formatting.
         """
 
         try:
@@ -92,7 +95,7 @@ class CineAgentFilmCrew:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.7,
+                    temperature=0.85,
                     safety_settings=self.safety_settings
                 )
             )
@@ -101,50 +104,72 @@ class CineAgentFilmCrew:
                 raise ValueError("Response text from Gemini model is empty or None")
             cleaned_text = self._clean_json_string(response.text)
             data = json.loads(cleaned_text)
+            # Always carry genre and tone into the bible so downstream agents can use them
+            data["genre"] = genre
+            data["tone"] = tone
             return data
         except Exception as e:
-            logger.error(f"Executive Producer Agent error: {e}")
+            logger.error(f"Executive Producer Agent FAILED — returning fallback. Error: {e}", exc_info=True)
             return {
-                "title": f"The {genre.title()} Directive",
+                "title": f"The {genre} Chronicles",
                 "logline": premise,
-                "target_audience": "Sci-Fi & Action Enthusiasts (18-45)",
+                "genre": genre,
+                "tone": tone,
+                "target_audience": f"{genre} Enthusiasts (18-45)",
                 "characters": [
-                    {"name": "Dr. Vance", "role": "Protagonist", "archetype_description": "Brilliant quantum physicist burdened by past failure.", "costume_design": "Utilitarian lab coat over dark, stained tactical gear. A holographic multi-tool strapped to her wrist.", "gender": "FEMALE", "voice_id": "en-US-Journey-F"},
-                    {"name": "Kael", "role": "Deuteragonist", "archetype_description": "Cybernetic rogue with insider knowledge.", "costume_design": "Asymmetric leather jacket with exposed wiring and neon threading. Heavy cyber-boots.", "gender": "MALE", "voice_id": "en-GB-Neural2-B"},
-                    {"name": "Director Sterling", "role": "Antagonist", "archetype_description": "Cold, pragmatic studio executive enforcing absolute order.", "costume_design": "Immaculate, sharply tailored stark-white suit with no visible seams or buttons. Pure minimalist authority.", "gender": "MALE", "voice_id": "en-US-Journey-D"}
+                    {"name": "The Protagonist", "role": "Protagonist", "archetype_description": f"The central figure driving the story in this {tone.lower()} {genre.lower()} world.", "costume_design": f"Practical attire for a {tone.lower()} {genre.lower()} setting.", "gender": "FEMALE", "voice_id": "en-US-Journey-F"},
+                    {"name": "The Ally", "role": "Deuteragonist", "archetype_description": f"A trusted companion whose loyalty is tested by the events of the story.", "costume_design": f"Complementary to the protagonist — genre-appropriate for {genre.lower()}.", "gender": "MALE", "voice_id": "en-GB-Neural2-B"},
+                    {"name": "The Antagonist", "role": "Antagonist", "archetype_description": f"A powerful opposing force rooted in the premise: {premise[:80]}...", "costume_design": f"Imposing and contrasting — commanding in the {genre.lower()} world.", "gender": "MALE", "voice_id": "en-US-Journey-D"},
+                    {"name": "The Mentor", "role": "Supporting", "archetype_description": f"A guide who provides wisdom at critical turning points in the {tone.lower()} narrative.", "costume_design": f"Distinguished and understated — appropriate for the {genre.lower()} world.", "gender": "FEMALE", "voice_id": "en-US-Neural2-F"}
                 ],
                 "act_outline": [
-                    {"act_number": 1, "title": "The Breach", "summary": "An unforeseen anomaly shatters atmospheric containment."},
-                    {"act_number": 2, "title": "Into the Shadows", "summary": "Unlikely allies infiltrate high-security data vaults."},
-                    {"act_number": 3, "title": "Singularity", "summary": "A high-stakes showdown determines human survival."}
+                    {"act_number": 1, "title": "The Inciting Incident", "summary": f"The world is established in a {tone.lower()} light before everything changes."},
+                    {"act_number": 2, "title": "Rising Conflict", "summary": f"Allies and enemies emerge as the stakes escalate across a {genre.lower()} landscape."},
+                    {"act_number": 3, "title": "Resolution", "summary": f"A climactic confrontation resolves the central conflict of the premise."}
                 ]
             }
 
     def run_screenwriter(self, film_bible: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
         Screenwriter Agent:
-        Writes 3 formatted screenplay scenes complete with headings, descriptions, and dialogue lines.
+        Writes screenplay scenes derived from the film bible.
+        Scene count, tone, and characters all come from the LLM — no hardcoded limits.
         """
-        title = film_bible.get("title", "Untitled Blockbuster")
+        title = film_bible.get("title", "Untitled")
         logline = film_bible.get("logline", "")
+        genre = film_bible.get("genre", "Drama")
+        tone = film_bible.get("tone", "Cinematic & Epic")
+        act_outline = json.dumps(film_bible.get("act_outline", []))
         characters = json.dumps(film_bible.get("characters", []))
 
         prompt = f"""
-        You are an Award-Winning Screenwriter.
-        Write 3 distinct key scenes for the feature film titled "{title}".
+        You are an Award-Winning Screenwriter adapting the following film concept into a screenplay.
+
+        Film: "{title}"
+        Genre: {genre}
+        Tone: {tone}
         Premise: {logline}
+        Act Outline: {act_outline}
         Characters: {characters}
 
-        Generate a JSON array of 3 scenes, each containing:
-        - "scene_id": "scene-1", "scene-2", "scene-3"
-        - "title": Scene title
-        - "heading": Standard screenplay heading (e.g. "INT. ORBITAL LAB - NIGHT")
-        - "description": Vivid action and atmosphere description
-        - "dialogue": Array of dialogue objects, each with "character", "emotion", and "line"
-        - "tension_score": Number between 1.0 and 10.0 indicating dramatic tension
-        - "pacing_tag": "SETUP", "SUSPENSE", "CLIMAX", or "RESOLVE"
+        Write one key scene for EACH ACT in the act outline (so if there are 3 acts, write 3 scenes; 4 acts = 4 scenes).
+        Each scene should be the most dramatically significant moment of its act.
 
-        Respond strictly with a valid JSON array.
+        The tone "{tone}" MUST shape:
+        - Scene locations and atmosphere (dark & gritty = raw, industrial settings; lighthearted = warm, inviting spaces)
+        - Dialogue voice and character emotions
+        - Pacing and action beats
+
+        Generate a JSON array where each element is a scene with:
+        - "scene_id": "scene-1", "scene-2", etc.
+        - "title": Dramatic scene title
+        - "heading": Proper screenplay slugline (e.g. "INT. ABANDONED WAREHOUSE - NIGHT")
+        - "description": 2-3 vivid sentences of action/atmosphere that match the tone
+        - "dialogue": Array of 2-4 exchanges, each with "character" (use UPPERCASE names from the cast), "emotion", and "line"
+        - "tension_score": Float from 1.0 (calm) to 10.0 (maximum tension)
+        - "pacing_tag": One of "SETUP", "SUSPENSE", "CLIMAX", "RESOLVE"
+
+        Use ONLY the character names provided. Respond strictly with a valid JSON array.
         """
 
         try:
@@ -154,7 +179,7 @@ class CineAgentFilmCrew:
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.75,
+                    temperature=0.85,
                     safety_settings=self.safety_settings
                 )
             )
@@ -165,32 +190,27 @@ class CineAgentFilmCrew:
             scenes = json.loads(cleaned_text)
             return scenes
         except Exception as e:
-            logger.error(f"Screenwriter Agent error: {e}")
+            logger.error(f"Screenwriter Agent FAILED — returning fallback. Error: {e}", exc_info=True)
+            # Build a minimal but story-specific fallback using the actual film bible data
+            chars = film_bible.get("characters", [])
+            char_a = chars[0]["name"].upper() if len(chars) > 0 else "PROTAGONIST"
+            char_b = chars[1]["name"].upper() if len(chars) > 1 else "ALLY"
+            char_c = chars[-1]["name"].upper() if len(chars) > 2 else char_b
+            acts = film_bible.get("act_outline", [{"title": "Opening"}, {"title": "Confrontation"}, {"title": "Resolution"}])
             return [
                 {
-                    "scene_id": "scene-1",
-                    "title": "Containment Overdrive",
-                    "heading": "INT. DEEP SPACE RESEARCH FACILITY - NIGHT",
-                    "description": "Blinding red warning beacons pulse across glass control panels as ice crystals crystallize on Dr. Vance's face mask.",
+                    "scene_id": f"scene-{i+1}",
+                    "title": act.get("title", f"Scene {i+1}"),
+                    "heading": f"INT. {title.upper()} LOCATION - {'DAY' if i == 0 else 'NIGHT'}",
+                    "description": f"Act {i+1} of '{title}': {act.get('summary', logline)}",
                     "dialogue": [
-                        {"character": "DR. VANCE", "emotion": "Panicked", "line": "Override the thermal locks! We have under forty seconds before the reactor collapses!"},
-                        {"character": "KAEL", "emotion": "Grim", "line": "The locks aren't responding. Someone sealed us inside on purpose."}
+                        {"character": char_a, "emotion": "Determined", "line": f"We have to see this through. Everything depends on what happens next."},
+                        {"character": char_b if i % 2 == 0 else char_c, "emotion": "Tense", "line": f"I know. But are we ready for what comes after?"}
                     ],
-                    "tension_score": 8.5,
-                    "pacing_tag": "SUSPENSE"
-                },
-                {
-                    "scene_id": "scene-2",
-                    "title": "Neon Interrogation",
-                    "heading": "EXT. RAIN-SLICKED UNDERDECK - NIGHT",
-                    "description": "Steam vents hiss beneath flickering blue holographic neon billboards.",
-                    "dialogue": [
-                        {"character": "DIRECTOR STERLING", "emotion": "Cold", "line": "You think you discovered a secret, Vance. You merely stumbled onto corporate routine."},
-                        {"character": "DR. VANCE", "emotion": "Defiant", "line": "Human memory isn't your routine. I'm releasing the source code."}
-                    ],
-                    "tension_score": 9.3,
-                    "pacing_tag": "CLIMAX"
+                    "tension_score": round(3.0 + (i * 3.0), 1),
+                    "pacing_tag": ["SETUP", "SUSPENSE", "CLIMAX", "RESOLVE"][min(i, 3)]
                 }
+                for i, act in enumerate(acts)
             ]
 
     def run_storyboard_director(self, scenes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
