@@ -83,6 +83,47 @@ export CLICKHOUSE_PORT="8443"
 ```
 *(If no ClickHouse environment variables are provided, CineAgent Studio automatically activates the **Embedded ClickHouse Vector Engine** for seamless offline testing.)*
 
+### 2a. Production Observability
+
+The API writes one JSON object per event to standard output. Cloud Run and GKE
+automatically ingest these records into **Cloud Logging**; no service-account key
+or separate logging transport is needed. Every request carries an `X-Request-ID`
+(generated when absent), allowing you to correlate its HTTP, Gemini, image/TTS,
+and ClickHouse events.
+
+By default, logs store only a SHA-256 digest and character count for user input,
+LLM prompts, and LLM responses. This makes it possible to correlate repeated
+inputs and monitor payload size without putting creative content or personal data
+in Cloud Logging. Raw content is never needed for normal production monitoring.
+
+```bash
+# Recommended production settings
+export LOG_LEVEL=INFO
+export CINEAGENT_LOG_CONTENT=false
+
+# Only in a short-lived, access-controlled debugging environment:
+export CINEAGENT_LOG_CONTENT=true
+export CINEAGENT_LOG_CONTENT_MAX_CHARS=2000
+```
+
+The LLM events include `agent`, `provider`, `model`, `response_model_version`,
+latency, token counts when returned by Vertex AI, finish metadata, and an opaque
+response identifier. The system does **not** capture or request model
+chain-of-thought / thinking; it is not an application observability signal and
+should not be retained. Logs also record fallback use (Imagen → Pollinations or
+embedded ClickHouse), retries, API latency/status, TTS voice, and database
+operation timing.
+
+Example Logs Explorer query:
+
+```
+jsonPayload.event=("llm_request_completed" OR "llm_request_failed")
+jsonPayload.model="gemini-2.5-flash"
+```
+
+Set Cloud Logging retention, IAM access, and (if content capture is ever enabled)
+an exclusion/sink policy to meet your data-retention requirements.
+
 ### 3. Run Application Server
 ```bash
 source venv/bin/activate

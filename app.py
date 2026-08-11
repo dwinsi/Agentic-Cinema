@@ -1,5 +1,6 @@
 import os
 import logging
+import time
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.staticfiles import StaticFiles
@@ -7,26 +8,47 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 import uuid
-from gtts import gTTS
+
+from observability import configure_logging, content_metadata, get_logger, log_event, request_id_ctx
+configure_logging()
 
 from agents.film_crew import film_crew
 from database.clickhouse_client import ch_manager
 
-try:
-    import google.cloud.logging
-    gcp_project_id = os.getenv("GCP_PROJECT_ID", "project-2154682a-9280-4a32-a72")
-    log_client = google.cloud.logging.Client(project=gcp_project_id)
-    log_client.setup_logging()
-except Exception as e:
-    logging.basicConfig(level=logging.INFO)
-    logging.getLogger(__name__).warning(f"Failed to setup GCP logging, fallback to local: {e}")
-logger = logging.getLogger("CineAgent.App")
+logger = get_logger("CineAgent.App")
 
 app = FastAPI(
     title="CineAgent Studio API",
     description="Multi-Agent AI Film Production Engine with Gemini & ClickHouse",
     version="1.0.0"
 )
+
+
+@app.middleware("http")
+async def request_observability(request: Request, call_next):
+    """Attach a request id and emit one event for every API request."""
+    request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+    token = request_id_ctx.set(request_id)
+    started = time.perf_counter()
+    try:
+        response = await call_next(request)
+        status_code = response.status_code
+        response.headers["X-Request-ID"] = request_id
+        return response
+    except Exception:
+        status_code = 500
+        logger.exception("Unhandled request failure")
+        raise
+    finally:
+        log_event(
+            logger,
+            "http_request_completed",
+            method=request.method,
+            path=request.url.path,
+            status_code=status_code,
+            latency_ms=round((time.perf_counter() - started) * 1000, 2),
+        )
+        request_id_ctx.reset(token)
 
 # Mount static files directory
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -75,7 +97,8 @@ async def generate_film_project(req: FilmConceptRequest):
     5. ClickHouse Storage -> Vector Indexing
     """
     try:
-        logger.info(f"Generating film project for premise: {req.premise}")
+        log_event(logger, "film_project_requested", genre=req.genre, tone=req.tone,
+                  **content_metadata(req.premise, "premise"))
         
         # Step 1: Run Executive Producer Agent
         film_bible = film_crew.run_executive_producer(req.premise, req.genre, req.tone)
@@ -109,6 +132,7 @@ async def generate_film_project(req: FilmConceptRequest):
                 vector=vector
             )
 
+        log_event(logger, "film_project_completed", scene_count=len(scenes))
         return JSONResponse({
             "status": "success",
             "project": {
@@ -121,9 +145,9 @@ async def generate_film_project(req: FilmConceptRequest):
                 "clickhouse_indexed_scenes": len(scenes)
             }
         })
-    except Exception as e:
-        logger.error(f"Error generating film project: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Film project generation failed")
+        raise HTTPException(status_code=500, detail="Film project generation failed")
 
 @app.post("/api/revise-scene")
 async def revise_scene_endpoint(req: ReviseSceneRequest):
@@ -131,6 +155,8 @@ async def revise_scene_endpoint(req: ReviseSceneRequest):
     Interactive Storytelling: Rewrites a specific scene and regenerates its assets.
     """
     try:
+        log_event(logger, "scene_revision_requested", scene_id=req.scene.get("scene_id"),
+                  **content_metadata(req.notes, "director_notes"))
         # 1. Rewrite the scene
         revised_scene = film_crew.revise_scene(req.film_bible, req.scene, req.notes)
         
@@ -153,6 +179,7 @@ async def revise_scene_endpoint(req: ReviseSceneRequest):
             vector=vector
         )
 
+        log_event(logger, "scene_revision_completed", scene_id=revised_scene.get("scene_id"))
         return JSONResponse({
             "status": "success",
             "revised_scene": revised_scene,
@@ -160,9 +187,9 @@ async def revise_scene_endpoint(req: ReviseSceneRequest):
             "production_design": production_design[0] if production_design else {},
             "audio_post": audio_post[0] if audio_post else {}
         })
-    except Exception as e:
-        logger.error(f"Revise scene error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Scene revision failed")
+        raise HTTPException(status_code=500, detail="Scene revision failed")
 
 @app.post("/api/tts")
 async def generate_tts(req: TTSRequest):
@@ -177,6 +204,9 @@ async def generate_tts(req: TTSRequest):
         os.makedirs(audio_dir, exist_ok=True)
         filepath = os.path.join(audio_dir, filename)
         
+        started = time.perf_counter()
+        log_event(logger, "tts_generation_started", voice_id=req.voice_id, gender=req.gender,
+                  **content_metadata(req.text, "tts_text"))
         client = texttospeech.TextToSpeechClient()
         synthesis_input = texttospeech.SynthesisInput(text=req.text)
         
@@ -203,10 +233,13 @@ async def generate_tts(req: TTSRequest):
         with open(filepath, "wb") as out:
             out.write(response.audio_content)
 
+        log_event(logger, "tts_generation_completed", voice_id=req.voice_id,
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                  audio_bytes=len(response.audio_content))
         return JSONResponse({"status": "success", "audio_url": f"/static/audio/{filename}"})
-    except Exception as e:
-        logger.error(f"TTS generation error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("TTS generation failed")
+        raise HTTPException(status_code=500, detail="TTS generation failed")
 
 @app.post("/api/generate-image")
 async def generate_image(req: GenerateImageRequest):
@@ -217,6 +250,10 @@ async def generate_image(req: GenerateImageRequest):
         import urllib.request
         
         image_bytes = None
+        image_provider = "vertex_imagen"
+        started = time.perf_counter()
+        log_event(logger, "image_generation_started", model="imagen-3.0-generate-001",
+                  **content_metadata(req.prompt, "image_prompt"))
         
         try:
             # Attempt GCP Imagen 3 via Vertex AI
@@ -233,11 +270,14 @@ async def generate_image(req: GenerateImageRequest):
             
             if response.generated_images:
                 image_bytes = response.generated_images[0].image.image_bytes
-        except Exception as vertex_err:
-            logger.warning(f"Vertex AI Imagen failed (Likely missing quota/access). Falling back to Pollinations API. Error: {vertex_err}")
+        except Exception:
+            logger.warning("Vertex Imagen failed; using fallback", exc_info=True)
+            log_event(logger, "image_generation_fallback", level=logging.WARNING,
+                      provider="vertex_imagen", fallback_provider="pollinations")
         
         # Fallback to Pollinations API if Vertex AI fails
         if not image_bytes:
+            image_provider = "pollinations"
             import urllib.parse
             import random
             import ssl
@@ -263,11 +303,12 @@ async def generate_image(req: GenerateImageRequest):
                         break # Success
                 except Exception as poll_err:
                     if hasattr(poll_err, 'code') and poll_err.code == 429:
-                        logger.warning(f"Pollinations API 429 Too Many Requests on attempt {attempt+1}. Retrying...")
+                        log_event(logger, "image_generation_retry", level=logging.WARNING,
+                                  provider="pollinations", attempt=attempt + 1, reason="rate_limited")
                         if attempt < 2:
                             time.sleep(2 * (attempt + 1)) # Backoff 2s, then 4s
                     else:
-                        logger.error(f"Pollinations API failed: {poll_err}")
+                        logger.exception("Pollinations image generation failed")
                         break
 
         if not image_bytes:
@@ -278,6 +319,7 @@ async def generate_image(req: GenerateImageRequest):
             </svg>'''
             image_bytes = svg.encode('utf-8')
             filename = f"img_fallback_{uuid.uuid4().hex[:8]}.svg"
+            image_provider = "svg_fallback"
         else:
             safe_prompt = "".join([c for c in req.prompt[:20].lower() if c.isalnum()]).replace(' ', '_')
             filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.jpg"
@@ -289,27 +331,32 @@ async def generate_image(req: GenerateImageRequest):
         with open(filepath, "wb") as f:
             f.write(image_bytes)
             
+        log_event(logger, "image_generation_completed", provider=image_provider,
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2), image_bytes=len(image_bytes))
         return JSONResponse({"status": "success", "image_url": f"/static/images/storyboards/{filename}"})
-    except Exception as e:
-        logger.error(f"Image generation fatal error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Image generation failed")
+        raise HTTPException(status_code=500, detail="Image generation failed")
 
 @app.post("/api/vector-search")
 async def vector_search(req: VectorSearchRequest):
     """Performs semantic vector search across ClickHouse script embeddings."""
     try:
+        log_event(logger, "vector_search_requested", limit=req.limit,
+                  **content_metadata(req.query, "search_query"))
         # Synthesize query vector based on query length/content
         query_vector = [0.80, 0.15, 0.40, 0.88, 0.30, 0.75, 0.20, 0.85]
         results = ch_manager.vector_search_scenes(query_vector, req.limit)
+        log_event(logger, "vector_search_completed", limit=req.limit, result_count=len(results))
         return JSONResponse({
             "status": "success",
             "query": req.query,
             "vector_dimension": 8,
             "results": results
         })
-    except Exception as e:
-        logger.error(f"Vector search error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Vector search failed")
+        raise HTTPException(status_code=500, detail="Vector search failed")
 
 @app.get("/api/analytics")
 async def get_analytics():
@@ -320,9 +367,9 @@ async def get_analytics():
             "status": "success",
             "telemetry": data
         })
-    except Exception as e:
-        logger.error(f"Analytics endpoint error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("Analytics endpoint failed")
+        raise HTTPException(status_code=500, detail="Analytics endpoint failed")
 
 if __name__ == "__main__":
     import uvicorn

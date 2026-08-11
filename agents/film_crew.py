@@ -1,11 +1,13 @@
 import os
 import json
 import logging
+import time
 from typing import Dict, Any, List
 from google import genai
 from google.genai import types
+from observability import content_metadata, get_logger, log_event
 
-logger = logging.getLogger("CineAgent.FilmCrew")
+logger = get_logger("CineAgent.FilmCrew")
 
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "project-2154682a-9280-4a32-a72")
 
@@ -57,6 +59,69 @@ class CineAgentFilmCrew:
             text = text[:-3]
         return text.strip()
 
+    def _generate_json(self, agent: str, prompt: str, temperature: float):
+        """Call Gemini and record safe, queryable LLM telemetry.
+
+        We intentionally do not log model chain-of-thought or any internal
+        reasoning. Gemini does not expose it as a supported application signal;
+        logging it would also create an unnecessary sensitive-data liability.
+        """
+        started = time.perf_counter()
+        log_event(
+            logger,
+            "llm_request_started",
+            agent=agent,
+            provider="vertex_ai",
+            model=self.model_name,
+            location="us-central1",
+            response_mime_type="application/json",
+            temperature=temperature,
+            **content_metadata(prompt, "prompt"),
+        )
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=temperature,
+                    safety_settings=self.safety_settings,
+                ),
+            )
+            usage = getattr(response, "usage_metadata", None)
+            usage_fields = {
+                "prompt_token_count": getattr(usage, "prompt_token_count", None),
+                "candidates_token_count": getattr(usage, "candidates_token_count", None),
+                "total_token_count": getattr(usage, "total_token_count", None),
+            }
+            log_event(
+                logger,
+                "llm_request_completed",
+                agent=agent,
+                provider="vertex_ai",
+                model=self.model_name,
+                response_model_version=getattr(response, "model_version", None),
+                response_id=getattr(response, "response_id", None),
+                latency_ms=round((time.perf_counter() - started) * 1000, 2),
+                finish_reason=str(getattr(response, "finish_reason", None)),
+                **usage_fields,
+                **content_metadata(getattr(response, "text", None), "response"),
+            )
+            if not response.text:
+                raise ValueError("Response text from Gemini model is empty or None")
+            return response
+        except Exception:
+            log_event(
+                logger,
+                "llm_request_failed",
+                level=logging.ERROR,
+                agent=agent,
+                provider="vertex_ai",
+                model=self.model_name,
+                latency_ms=round((time.perf_counter() - started) * 1000, 2),
+            )
+            raise
+
     def run_executive_producer(self, premise: str, genre: str, tone: str) -> Dict[str, Any]:
         """
         Director / Executive Producer Agent:
@@ -89,19 +154,7 @@ class CineAgentFilmCrew:
         """
 
         try:
-            logger.info(f"Executive Producer Agent - LLM Input (Prompt):\n{prompt}")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.85,
-                    safety_settings=self.safety_settings
-                )
-            )
-            logger.info(f"Executive Producer Agent - LLM Output (Raw Response):\n{response.text}")
-            if not response.text:
-                raise ValueError("Response text from Gemini model is empty or None")
+            response = self._generate_json("executive_producer", prompt, 0.85)
             cleaned_text = self._clean_json_string(response.text)
             data = json.loads(cleaned_text)
             # Always carry genre and tone into the bible so downstream agents can use them
@@ -109,7 +162,7 @@ class CineAgentFilmCrew:
             data["tone"] = tone
             return data
         except Exception as e:
-            logger.error(f"Executive Producer Agent FAILED — returning fallback. Error: {e}", exc_info=True)
+            logger.exception("Executive Producer Agent failed; returning fallback")
             return {
                 "title": f"The {genre} Chronicles",
                 "logline": premise,
@@ -173,24 +226,12 @@ class CineAgentFilmCrew:
         """
 
         try:
-            logger.info(f"Screenwriter Agent - LLM Input (Prompt):\n{prompt}")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.85,
-                    safety_settings=self.safety_settings
-                )
-            )
-            logger.info(f"Screenwriter Agent - LLM Output (Raw Response):\n{response.text}")
-            if not response.text:
-                raise ValueError("Response text from Gemini model is empty or None")
+            response = self._generate_json("screenwriter", prompt, 0.85)
             cleaned_text = self._clean_json_string(response.text)
             scenes = json.loads(cleaned_text)
             return scenes
         except Exception as e:
-            logger.error(f"Screenwriter Agent FAILED — returning fallback. Error: {e}", exc_info=True)
+            logger.exception("Screenwriter Agent failed; returning fallback")
             # Build a minimal but story-specific fallback using the actual film bible data
             chars = film_bible.get("characters", [])
             char_a = chars[0]["name"].upper() if len(chars) > 0 else "PROTAGONIST"
@@ -255,23 +296,11 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
-            logger.info(f"Production Designer Agent - LLM Input (Prompt):\n{prompt}")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.8,
-                    safety_settings=self.safety_settings
-                )
-            )
-            logger.info(f"Production Designer Agent - LLM Output (Raw Response):\n{response.text}")
-            if not response.text:
-                raise ValueError("Response text empty")
+            response = self._generate_json("production_designer", prompt, 0.8)
             cleaned_text = self._clean_json_string(response.text)
             return json.loads(cleaned_text)
         except Exception as e:
-            logger.error(f"Production Designer Agent error: {e}")
+            logger.exception("Production Designer Agent failed; returning fallback")
             return [
                 {
                     "scene_id": s.get("scene_id", f"scene-{i}"),
@@ -302,23 +331,11 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
-            logger.info(f"Audio Department Agent - LLM Input (Prompt):\n{prompt}")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.75,
-                    safety_settings=self.safety_settings
-                )
-            )
-            logger.info(f"Audio Department Agent - LLM Output (Raw Response):\n{response.text}")
-            if not response.text:
-                raise ValueError("Response text empty")
+            response = self._generate_json("audio_department", prompt, 0.75)
             cleaned_text = self._clean_json_string(response.text)
             return json.loads(cleaned_text)
         except Exception as e:
-            logger.error(f"Audio Department Agent error: {e}")
+            logger.exception("Audio Department Agent failed; returning fallback")
             return [
                 {
                     "scene_id": s.get("scene_id", f"scene-{i}"),
@@ -353,23 +370,11 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON object.
         """
         try:
-            logger.info(f"Screenwriter Agent (Revise Scene) - LLM Input (Prompt):\n{prompt}")
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.7,
-                    safety_settings=self.safety_settings
-                )
-            )
-            logger.info(f"Screenwriter Agent (Revise Scene) - LLM Output (Raw Response):\n{response.text}")
-            if not response.text:
-                raise ValueError("Response text empty")
+            response = self._generate_json("screenwriter_revision", prompt, 0.7)
             cleaned_text = self._clean_json_string(response.text)
             return json.loads(cleaned_text)
         except Exception as e:
-            logger.error(f"Screenwriter Agent revise_scene error: {e}")
+            logger.exception("Screenwriter revision failed; returning fallback")
             # Fallback
             revised_scene = original_scene.copy()
             revised_scene["description"] = f"[REVISED per Notes: {directors_notes}] " + original_scene.get("description", "")
