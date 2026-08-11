@@ -12,13 +12,13 @@ logger = get_logger("CineAgent.FilmCrew")
 PROJECT_ID = os.getenv("GCP_PROJECT_ID", "project-2154682a-9280-4a32-a72")
 
 def get_gemini_client() -> genai.Client:
-    """Initializes and returns the Gemini Enterprise Agent Client."""
+    """Initializes and returns the Vertex AI Gemini client."""
     # Clean up key path overrides if any exist in session
     if "GOOGLE_APPLICATION_CREDENTIALS" in os.environ and not os.path.exists(os.environ["GOOGLE_APPLICATION_CREDENTIALS"]):
         del os.environ["GOOGLE_APPLICATION_CREDENTIALS"]
 
     return genai.Client(
-        enterprise=True,
+        vertexai=True,
         project=PROJECT_ID,
         location="us-central1"
     )
@@ -59,7 +59,16 @@ class CineAgentFilmCrew:
             text = text[:-3]
         return text.strip()
 
-    def _generate_json(self, agent: str, prompt: str, temperature: float):
+    def _parse_json_response(self, text: str, agent: str, expected_type: type) -> Any:
+        """Parse and validate the top-level JSON contract required by an agent."""
+        payload = json.loads(self._clean_json_string(text))
+        if not isinstance(payload, expected_type):
+            raise ValueError(
+                f"{agent} returned {type(payload).__name__}; expected {expected_type.__name__}"
+            )
+        return payload
+
+    def _generate_json(self, agent: str, prompt: str, temperature: float) -> str:
         """Call Gemini and record safe, queryable LLM telemetry.
 
         We intentionally do not log model chain-of-thought or any internal
@@ -88,6 +97,7 @@ class CineAgentFilmCrew:
                     safety_settings=self.safety_settings,
                 ),
             )
+            response_text = response.text
             usage = getattr(response, "usage_metadata", None)
             usage_fields = {
                 "prompt_token_count": getattr(usage, "prompt_token_count", None),
@@ -105,11 +115,11 @@ class CineAgentFilmCrew:
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
                 finish_reason=str(getattr(response, "finish_reason", None)),
                 **usage_fields,
-                **content_metadata(getattr(response, "text", None), "response"),
+                **content_metadata(response_text, "response"),
             )
-            if not response.text:
+            if not response_text:
                 raise ValueError("Response text from Gemini model is empty or None")
-            return response
+            return response_text
         except Exception:
             log_event(
                 logger,
@@ -154,14 +164,13 @@ class CineAgentFilmCrew:
         """
 
         try:
-            response = self._generate_json("executive_producer", prompt, 0.85)
-            cleaned_text = self._clean_json_string(response.text)
-            data = json.loads(cleaned_text)
+            response_text = self._generate_json("executive_producer", prompt, 0.85)
+            data = self._parse_json_response(response_text, "executive_producer", dict)
             # Always carry genre and tone into the bible so downstream agents can use them
             data["genre"] = genre
             data["tone"] = tone
             return data
-        except Exception as e:
+        except Exception:
             logger.exception("Executive Producer Agent failed; returning fallback")
             return {
                 "title": f"The {genre} Chronicles",
@@ -226,11 +235,9 @@ class CineAgentFilmCrew:
         """
 
         try:
-            response = self._generate_json("screenwriter", prompt, 0.85)
-            cleaned_text = self._clean_json_string(response.text)
-            scenes = json.loads(cleaned_text)
-            return scenes
-        except Exception as e:
+            response_text = self._generate_json("screenwriter", prompt, 0.85)
+            return self._parse_json_response(response_text, "screenwriter", list)
+        except Exception:
             logger.exception("Screenwriter Agent failed; returning fallback")
             # Build a minimal but story-specific fallback using the actual film bible data
             chars = film_bible.get("characters", [])
@@ -296,10 +303,9 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
-            response = self._generate_json("production_designer", prompt, 0.8)
-            cleaned_text = self._clean_json_string(response.text)
-            return json.loads(cleaned_text)
-        except Exception as e:
+            response_text = self._generate_json("production_designer", prompt, 0.8)
+            return self._parse_json_response(response_text, "production_designer", list)
+        except Exception:
             logger.exception("Production Designer Agent failed; returning fallback")
             return [
                 {
@@ -331,10 +337,9 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
-            response = self._generate_json("audio_department", prompt, 0.75)
-            cleaned_text = self._clean_json_string(response.text)
-            return json.loads(cleaned_text)
-        except Exception as e:
+            response_text = self._generate_json("audio_department", prompt, 0.75)
+            return self._parse_json_response(response_text, "audio_department", list)
+        except Exception:
             logger.exception("Audio Department Agent failed; returning fallback")
             return [
                 {
@@ -363,17 +368,29 @@ class CineAgentFilmCrew:
         - "title": Revised scene title
         - "heading": Revised slugline
         - "description": Revised scene description
-        - "dialogues": Revised array of {{"character", "text", "parenthetical"}}
+        - "dialogue": Revised array of {{"character", "emotion", "line"}}
         - "tension_score": Float 1-10
         - "pacing_tag": e.g., SLOW, BUILD, ACTION
 
         Respond strictly with a valid JSON object.
         """
         try:
-            response = self._generate_json("screenwriter_revision", prompt, 0.7)
-            cleaned_text = self._clean_json_string(response.text)
-            return json.loads(cleaned_text)
-        except Exception as e:
+            response_text = self._generate_json("screenwriter_revision", prompt, 0.7)
+            revised_scene = self._parse_json_response(response_text, "screenwriter_revision", dict)
+            # Accept an older model response while always returning the UI contract.
+            if "dialogue" not in revised_scene and isinstance(revised_scene.get("dialogues"), list):
+                revised_scene["dialogue"] = [
+                    {
+                        "character": item.get("character", ""),
+                        "emotion": item.get("emotion", item.get("parenthetical", "")),
+                        "line": item.get("line", item.get("text", "")),
+                    }
+                    for item in revised_scene["dialogues"]
+                    if isinstance(item, dict)
+                ]
+            revised_scene.pop("dialogues", None)
+            return revised_scene
+        except Exception:
             logger.exception("Screenwriter revision failed; returning fallback")
             # Fallback
             revised_scene = original_scene.copy()
