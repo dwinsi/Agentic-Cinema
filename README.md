@@ -110,9 +110,8 @@ The LLM events include `agent`, `provider`, `model`, `response_model_version`,
 latency, token counts when returned by Vertex AI, finish metadata, and an opaque
 response identifier. The system does **not** capture or request model
 chain-of-thought / thinking; it is not an application observability signal and
-should not be retained. Logs also record fallback use (Imagen → Pollinations or
-embedded ClickHouse), retries, API latency/status, TTS voice, and database
-operation timing.
+should not be retained. Logs also record unavailable Imagen requests, embedded
+ClickHouse use, API latency/status, TTS voice, and database operation timing.
 
 Example Logs Explorer query:
 
@@ -130,6 +129,42 @@ source venv/bin/activate
 python3 app.py
 ```
 Open your browser and navigate to: **`http://localhost:8000`**
+
+### 4. Deploy to Cloud Run
+
+The repository includes a `Dockerfile` and `.dockerignore` for Cloud Run. The
+image deliberately excludes `.env` files and service-account keys. Do not copy
+credentials into the image or commit them to Git; use a Cloud Run service account
+for Google APIs and Secret Manager for ClickHouse credentials.
+
+```bash
+# Authenticate and choose your target project (once per workstation)
+gcloud auth login
+gcloud config set project YOUR_PROJECT_ID
+
+# Enable the required managed services (once per project)
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com aiplatform.googleapis.com \
+  texttospeech.googleapis.com secretmanager.googleapis.com
+
+# Create the ClickHouse password secret once, without putting its value in a command history.
+printf %s "YOUR_CLICKHOUSE_PASSWORD" | gcloud secrets create cineagent-clickhouse-password \
+  --data-file=-
+
+# Build from this repository and deploy a Cloud Run service.
+gcloud run deploy cineagent-api \
+  --source . \
+  --region us-central1 \
+  --allow-unauthenticated \
+  --set-env-vars GCP_PROJECT_ID=YOUR_PROJECT_ID,CLICKHOUSE_HOST=YOUR_HOST,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true \
+  --set-secrets CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:1
+```
+
+Grant the Cloud Run runtime service account the **Vertex AI User** role so Gemini,
+Imagen, and Cloud Text-to-Speech can use Application Default Credentials; also
+grant it **Secret Manager Secret Accessor** for the ClickHouse password. The
+Cloud Run service's standard-output JSON is automatically stored in Cloud Logging;
+open **Cloud Run → cineagent-api → Logs** after invoking an endpoint.
 
 ---
 

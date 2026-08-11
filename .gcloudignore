@@ -1,0 +1,23 @@
+# Keep local credentials out of the Cloud Build source archive as well as the image.
+.git
+.gitignore
+.gcloudignore
+.env
+.env.*
+*.key
+*.pem
+*service-account*.json
+agentic-cinema-key.json
+
+__pycache__/
+*.py[cod]
+venv/
+env/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+test_*.py
+Documents/
+static/audio/
+static/images/

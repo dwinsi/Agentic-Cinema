@@ -247,7 +247,6 @@ async def generate_image(req: GenerateImageRequest):
     try:
         from agents.film_crew import get_gemini_client
         from google.genai import types
-        import urllib.request
         
         image_bytes = None
         image_provider = "vertex_imagen"
@@ -271,51 +270,16 @@ async def generate_image(req: GenerateImageRequest):
             if response.generated_images:
                 image_bytes = response.generated_images[0].image.image_bytes
         except Exception:
-            logger.warning("Vertex Imagen failed; using fallback", exc_info=True)
-            log_event(logger, "image_generation_fallback", level=logging.WARNING,
-                      provider="vertex_imagen", fallback_provider="pollinations")
-        
-        # Fallback to Pollinations API if Vertex AI fails
-        if not image_bytes:
-            image_provider = "pollinations"
-            import urllib.parse
-            import random
-            import ssl
-            import time
-            
-            safe_prompt = urllib.parse.quote(req.prompt + ", cinematic masterpiece, 8k resolution, highly detailed, professional cinematography")
-            
-            # Bypass macOS local issuer certificate issues for the fallback API
-            ctx = ssl.create_default_context()
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            
-            for attempt in range(3):
-                seed = random.randint(1, 1000000)
-                # Fallback to turbo on last attempt to bypass potential model-specific rate limits
-                api_model = "flux" if attempt < 2 else "turbo"
-                pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true&seed={seed}&model={api_model}&safe=true"
-                
-                try:
-                    req_img = urllib.request.Request(pollinations_url, headers={'User-Agent': 'Mozilla/5.0 (CineAgent Studio/1.0)'})
-                    with urllib.request.urlopen(req_img, context=ctx, timeout=15) as response:
-                        image_bytes = response.read()
-                        break # Success
-                except Exception as poll_err:
-                    if hasattr(poll_err, 'code') and poll_err.code == 429:
-                        log_event(logger, "image_generation_retry", level=logging.WARNING,
-                                  provider="pollinations", attempt=attempt + 1, reason="rate_limited")
-                        if attempt < 2:
-                            time.sleep(2 * (attempt + 1)) # Backoff 2s, then 4s
-                    else:
-                        logger.exception("Pollinations image generation failed")
-                        break
+            logger.warning("Vertex Imagen failed; returning placeholder", exc_info=True)
+            log_event(logger, "image_generation_unavailable", level=logging.WARNING,
+                      provider="vertex_imagen", reason="provider_error")
 
         if not image_bytes:
-            # Fallback to an SVG placeholder instead of crashing the UI
+            # Never call a third-party generative model: submission rules permit
+            # Google Cloud AI tooling only. Keep the UI usable with a local asset.
             svg = f'''<svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
                 <rect width="100%" height="100%" fill="#0f172a"/>
-                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#64748b">Image Generation Unavailable (Rate Limited)</text>
+                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#64748b">Vertex Imagen unavailable — no external AI fallback used</text>
             </svg>'''
             image_bytes = svg.encode('utf-8')
             filename = f"img_fallback_{uuid.uuid4().hex[:8]}.svg"
