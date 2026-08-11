@@ -141,39 +141,75 @@ document.addEventListener("DOMContentLoaded", () => {
 
     function attachTTSListeners() {
         document.querySelectorAll(".play-tts-btn").forEach(btn => {
-            btn.addEventListener("click", async (e) => {
-                const btnEl = e.target.closest("button");
-                const char = btnEl.getAttribute("data-char");
-                const line = btnEl.getAttribute("data-line");
-                
-                const icon = btnEl.querySelector("i");
-                if (icon.classList.contains("fa-spinner")) return; // already loading
-                
-                icon.className = "fa-solid fa-spinner fa-spin"; // loading state
+            // Remove existing listener to prevent duplicates on re-render
+            const newBtn = btn.cloneNode(true);
+            btn.parentNode.replaceChild(newBtn, btn);
 
-                // Find character voice details
-                const charDetails = currentProject?.film_bible?.characters?.find(c => c.name.toLowerCase() === char.toLowerCase()) || {};
-                const voice_id = charDetails.voice_id || "en-US-Journey-D";
-                const gender = charDetails.gender || "MALE";
+            newBtn.addEventListener("click", async (e) => {
+                const btnEl = e.target.closest("button");
+                const char = btnEl.getAttribute("data-char") || "";
+                const line = btnEl.getAttribute("data-line") || "";
+
+                const icon = btnEl.querySelector("i");
+                if (icon && icon.classList.contains("fa-spinner")) return; // already loading
+                if (icon) icon.className = "fa-solid fa-spinner fa-spin";
+
+                // Unlock AudioContext on user gesture (required by Safari/Chrome autoplay policy)
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    if (ctx.state === "suspended") await ctx.resume();
+                } catch (_) {}
 
                 try {
+                    // Find character voice details safely
+                    let voice_id = "en-US-Journey-D";
+                    let gender = "MALE";
+
+                    if (currentProject && currentProject.film_bible && currentProject.film_bible.characters) {
+                        const charDetails = currentProject.film_bible.characters.find(c =>
+                            c.name && char && c.name.toLowerCase() === char.toLowerCase()
+                        ) || {};
+                        if (charDetails.voice_id) voice_id = charDetails.voice_id;
+                        if (charDetails.gender) gender = charDetails.gender;
+                    }
+
                     const res = await fetch("/api/tts", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({ character: char, text: line, voice_id: voice_id, gender: gender })
                     });
+
+                    if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+
                     const data = await res.json();
                     if (data.status === "success") {
-                        const audio = new Audio(data.audio_url);
-                        audio.play();
-                        icon.className = "fa-solid fa-volume-high"; // playing state
-                        audio.onended = () => { icon.className = "fa-solid fa-play"; };
+                        // Create a FRESH Audio object with the real URL — don't reuse the silent one
+                        const realAudio = new Audio();
+                        realAudio.preload = "auto";
+                        realAudio.src = data.audio_url;
+                        realAudio.load();
+
+                        realAudio.oncanplaythrough = () => {
+                            realAudio.play().then(() => {
+                                if (icon) icon.className = "fa-solid fa-volume-high";
+                                realAudio.onended = () => { if (icon) icon.className = "fa-solid fa-play"; };
+                            }).catch(err => {
+                                console.error("Audio play() blocked:", err);
+                                if (icon) icon.className = "fa-solid fa-play";
+                                alert("Audio was blocked by browser autoplay policy. Try clicking the button again.");
+                            });
+                        };
+
+                        realAudio.onerror = (err) => {
+                            console.error("Audio load error:", err);
+                            if (icon) icon.className = "fa-solid fa-play";
+                        };
                     } else {
-                        icon.className = "fa-solid fa-play";
+                        if (icon) icon.className = "fa-solid fa-play";
                     }
-                } catch(err) {
-                    console.error(err);
-                    icon.className = "fa-solid fa-play";
+                } catch (err) {
+                    console.error("TTS Error:", err);
+                    if (icon) icon.className = "fa-solid fa-play";
                 }
             });
         });
@@ -254,6 +290,10 @@ document.addEventListener("DOMContentLoaded", () => {
                 <h4>${c.name}</h4>
                 <span class="role-tag">${c.role}</span>
                 <p>${c.archetype_description}</p>
+                <div style="margin-top: 15px; font-size: 12px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 10px;">
+                    <p style="margin-bottom: 5px;"><strong><i class="fa-solid fa-shirt"></i> Costume:</strong> ${c.costume_design || 'Standard issued apparel.'}</p>
+                    <p style="margin-bottom: 0;"><strong><i class="fa-solid fa-microphone"></i> Voice Cast:</strong> ${c.gender || 'UNKNOWN'} (${c.voice_id || 'default'})</p>
+                </div>
             `;
             charactersGrid.appendChild(card);
         });
@@ -313,6 +353,54 @@ document.addEventListener("DOMContentLoaded", () => {
             
             // Asynchronously fetch image
             generateStoryboardImage(sb.image_prompt, index, sb.shot_type);
+        });
+
+        // Render Production Design
+        const designGrid = document.getElementById("design-grid");
+        designGrid.innerHTML = "";
+        (project.production_design || []).forEach((pd, index) => {
+            const card = document.createElement("div");
+            card.className = "hud-card";
+            card.style.marginBottom = "20px";
+            card.innerHTML = `
+                <h4><i class="fa-solid fa-building"></i> Scene ${index + 1} Set Design</h4>
+                <p style="margin-bottom: 10px;">${pd.set_design}</p>
+                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                    <div>
+                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Key Prop</strong>
+                        <p style="font-size: 14px; margin-top: 5px;">${pd.key_prop}</p>
+                    </div>
+                    <div>
+                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Wardrobe/Costume Notes</strong>
+                        <p style="font-size: 14px; margin-top: 5px;">${pd.costume_notes}</p>
+                    </div>
+                </div>
+            `;
+            designGrid.appendChild(card);
+        });
+
+        // Render Audio Post
+        const audioGrid = document.getElementById("audio-grid");
+        audioGrid.innerHTML = "";
+        (project.audio_post || []).forEach((ap, index) => {
+            const card = document.createElement("div");
+            card.className = "hud-card";
+            card.style.marginBottom = "20px";
+            card.innerHTML = `
+                <h4><i class="fa-solid fa-headphones"></i> Scene ${index + 1} Audio Mix</h4>
+                <p style="margin-bottom: 10px; font-size: 14px;"><strong>Score Theme:</strong> ${ap.soundtrack_theme}</p>
+                <div style="display: flex; flex-direction: column; gap: 15px; margin-top: 15px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 15px;">
+                    <div>
+                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Foley & SFX</strong>
+                        <p style="font-size: 14px; margin-top: 5px;">${ap.foley_effects}</p>
+                    </div>
+                    <div>
+                        <strong style="color: var(--accent-cyan); font-size: 12px; text-transform: uppercase;">Primary Audio Cue</strong>
+                        <p style="font-size: 14px; margin-top: 5px;">${ap.audio_cue}</p>
+                    </div>
+                </div>
+            `;
+            audioGrid.appendChild(card);
         });
 
         // Render Analytics & Stats
@@ -407,6 +495,5 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
-    // Initial Trigger
-    filmForm.dispatchEvent(new Event("submit"));
+    // Initial Trigger removed - user must click Greenlight Production
 });

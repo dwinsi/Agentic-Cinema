@@ -12,7 +12,14 @@ from gtts import gTTS
 from agents.film_crew import film_crew
 from database.clickhouse_client import ch_manager
 
-logging.basicConfig(level=logging.INFO)
+try:
+    import google.cloud.logging
+    gcp_project_id = os.getenv("GCP_PROJECT_ID", "project-2154682a-9280-4a32-a72")
+    log_client = google.cloud.logging.Client(project=gcp_project_id)
+    log_client.setup_logging()
+except Exception as e:
+    logging.basicConfig(level=logging.INFO)
+    logging.getLogger(__name__).warning(f"Failed to setup GCP logging, fallback to local: {e}")
 logger = logging.getLogger("CineAgent.App")
 
 app = FastAPI(
@@ -233,19 +240,47 @@ async def generate_image(req: GenerateImageRequest):
         if not image_bytes:
             import urllib.parse
             import random
-            safe_prompt = urllib.parse.quote(req.prompt + ", cinematic lighting, highly detailed storyboard sketch, masterpiece")
-            seed = random.randint(1, 1000000)
-            pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=800&height=450&nologo=true&seed={seed}"
+            import ssl
+            import time
             
-            req_img = urllib.request.Request(pollinations_url, headers={'User-Agent': 'Mozilla/5.0'})
-            with urllib.request.urlopen(req_img) as response:
-                image_bytes = response.read()
+            safe_prompt = urllib.parse.quote(req.prompt + ", cinematic masterpiece, 8k resolution, highly detailed, professional cinematography")
+            
+            # Bypass macOS local issuer certificate issues for the fallback API
+            ctx = ssl.create_default_context()
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            
+            for attempt in range(3):
+                seed = random.randint(1, 1000000)
+                # Fallback to turbo on last attempt to bypass potential model-specific rate limits
+                api_model = "flux" if attempt < 2 else "turbo"
+                pollinations_url = f"https://image.pollinations.ai/prompt/{safe_prompt}?width=1280&height=720&nologo=true&seed={seed}&model={api_model}&safe=true"
+                
+                try:
+                    req_img = urllib.request.Request(pollinations_url, headers={'User-Agent': 'Mozilla/5.0 (CineAgent Studio/1.0)'})
+                    with urllib.request.urlopen(req_img, context=ctx, timeout=15) as response:
+                        image_bytes = response.read()
+                        break # Success
+                except Exception as poll_err:
+                    if hasattr(poll_err, 'code') and poll_err.code == 429:
+                        logger.warning(f"Pollinations API 429 Too Many Requests on attempt {attempt+1}. Retrying...")
+                        if attempt < 2:
+                            time.sleep(2 * (attempt + 1)) # Backoff 2s, then 4s
+                    else:
+                        logger.error(f"Pollinations API failed: {poll_err}")
+                        break
 
         if not image_bytes:
-            raise ValueError("All image generation methods failed.")
-            
-        safe_prompt = "".join([c for c in req.prompt[:20].lower() if c.isalnum()]).replace(' ', '_')
-        filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.jpg"
+            # Fallback to an SVG placeholder instead of crashing the UI
+            svg = f'''<svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
+                <rect width="100%" height="100%" fill="#0f172a"/>
+                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#64748b">Image Generation Unavailable (Rate Limited)</text>
+            </svg>'''
+            image_bytes = svg.encode('utf-8')
+            filename = f"img_fallback_{uuid.uuid4().hex[:8]}.svg"
+        else:
+            safe_prompt = "".join([c for c in req.prompt[:20].lower() if c.isalnum()]).replace(' ', '_')
+            filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.jpg"
         
         img_dir = os.path.join(static_dir, "images", "storyboards")
         os.makedirs(img_dir, exist_ok=True)
@@ -256,7 +291,7 @@ async def generate_image(req: GenerateImageRequest):
             
         return JSONResponse({"status": "success", "image_url": f"/static/images/storyboards/{filename}"})
     except Exception as e:
-        logger.error(f"Image generation error: {e}")
+        logger.error(f"Image generation fatal error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/vector-search")

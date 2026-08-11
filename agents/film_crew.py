@@ -28,7 +28,34 @@ class CineAgentFilmCrew:
     """
     def __init__(self):
         self.client = get_gemini_client()
-        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-2.5-flash")
+        self.model_name = os.getenv("GEMINI_MODEL_NAME", "gemini-1.5-flash")
+        
+        # Strict safety guardrails for obscene language and explicit content
+        self.safety_settings = [
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE
+            ),
+            types.SafetySetting(
+                category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                threshold=types.HarmBlockThreshold.BLOCK_LOW_AND_ABOVE
+            )
+        ]
+
+    def _clean_json_string(self, text: str) -> str:
+        """Removes markdown code block formatting if present."""
+        text = text.strip()
+        if text.startswith("```json"):
+            text = text[7:]
+        elif text.startswith("```"):
+            text = text[3:]
+        if text.endswith("```"):
+            text = text[:-3]
+        return text.strip()
 
     def run_executive_producer(self, premise: str, genre: str, tone: str) -> Dict[str, Any]:
         """
@@ -50,6 +77,7 @@ class CineAgentFilmCrew:
             - "name": Character name
             - "role": Role in the story
             - "archetype_description": Brief psychological profile
+            - "costume_design": Visual description of their primary outfit and styling
             - "gender": "MALE" or "FEMALE"
             - "voice_id": A valid Google Cloud TTS Voice Name appropriate for the character (e.g. "en-US-Journey-F", "en-US-Journey-D", "en-GB-Neural2-A", "en-GB-Neural2-B", "en-US-Neural2-F")
         - "act_outline": Array of 3 acts ("act_number", "title", "summary")
@@ -58,17 +86,21 @@ class CineAgentFilmCrew:
         """
 
         try:
+            logger.info(f"Executive Producer Agent - LLM Input (Prompt):\n{prompt}")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.7
+                    temperature=0.7,
+                    safety_settings=self.safety_settings
                 )
             )
+            logger.info(f"Executive Producer Agent - LLM Output (Raw Response):\n{response.text}")
             if not response.text:
                 raise ValueError("Response text from Gemini model is empty or None")
-            data = json.loads(response.text)
+            cleaned_text = self._clean_json_string(response.text)
+            data = json.loads(cleaned_text)
             return data
         except Exception as e:
             logger.error(f"Executive Producer Agent error: {e}")
@@ -77,9 +109,9 @@ class CineAgentFilmCrew:
                 "logline": premise,
                 "target_audience": "Sci-Fi & Action Enthusiasts (18-45)",
                 "characters": [
-                    {"name": "Dr. Vance", "role": "Protagonist", "archetype_description": "Brilliant quantum physicist burdened by past failure."},
-                    {"name": "Kael", "role": "Deuteragonist", "archetype_description": "Cybernetic rogue with insider knowledge."},
-                    {"name": "Director Sterling", "role": "Antagonist", "archetype_description": "Cold, pragmatic studio executive enforcing absolute order."}
+                    {"name": "Dr. Vance", "role": "Protagonist", "archetype_description": "Brilliant quantum physicist burdened by past failure.", "costume_design": "Utilitarian lab coat over dark, stained tactical gear. A holographic multi-tool strapped to her wrist.", "gender": "FEMALE", "voice_id": "en-US-Journey-F"},
+                    {"name": "Kael", "role": "Deuteragonist", "archetype_description": "Cybernetic rogue with insider knowledge.", "costume_design": "Asymmetric leather jacket with exposed wiring and neon threading. Heavy cyber-boots.", "gender": "MALE", "voice_id": "en-GB-Neural2-B"},
+                    {"name": "Director Sterling", "role": "Antagonist", "archetype_description": "Cold, pragmatic studio executive enforcing absolute order.", "costume_design": "Immaculate, sharply tailored stark-white suit with no visible seams or buttons. Pure minimalist authority.", "gender": "MALE", "voice_id": "en-US-Journey-D"}
                 ],
                 "act_outline": [
                     {"act_number": 1, "title": "The Breach", "summary": "An unforeseen anomaly shatters atmospheric containment."},
@@ -116,17 +148,21 @@ class CineAgentFilmCrew:
         """
 
         try:
+            logger.info(f"Screenwriter Agent - LLM Input (Prompt):\n{prompt}")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.75
+                    temperature=0.75,
+                    safety_settings=self.safety_settings
                 )
             )
+            logger.info(f"Screenwriter Agent - LLM Output (Raw Response):\n{response.text}")
             if not response.text:
                 raise ValueError("Response text from Gemini model is empty or None")
-            scenes = json.loads(response.text)
+            cleaned_text = self._clean_json_string(response.text)
+            scenes = json.loads(cleaned_text)
             return scenes
         except Exception as e:
             logger.error(f"Screenwriter Agent error: {e}")
@@ -199,17 +235,21 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
+            logger.info(f"Production Designer Agent - LLM Input (Prompt):\n{prompt}")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.8
+                    temperature=0.8,
+                    safety_settings=self.safety_settings
                 )
             )
+            logger.info(f"Production Designer Agent - LLM Output (Raw Response):\n{response.text}")
             if not response.text:
                 raise ValueError("Response text empty")
-            return json.loads(response.text)
+            cleaned_text = self._clean_json_string(response.text)
+            return json.loads(cleaned_text)
         except Exception as e:
             logger.error(f"Production Designer Agent error: {e}")
             return [
@@ -242,17 +282,21 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON array.
         """
         try:
+            logger.info(f"Audio Department Agent - LLM Input (Prompt):\n{prompt}")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.75
+                    temperature=0.75,
+                    safety_settings=self.safety_settings
                 )
             )
+            logger.info(f"Audio Department Agent - LLM Output (Raw Response):\n{response.text}")
             if not response.text:
                 raise ValueError("Response text empty")
-            return json.loads(response.text)
+            cleaned_text = self._clean_json_string(response.text)
+            return json.loads(cleaned_text)
         except Exception as e:
             logger.error(f"Audio Department Agent error: {e}")
             return [
@@ -289,17 +333,21 @@ class CineAgentFilmCrew:
         Respond strictly with a valid JSON object.
         """
         try:
+            logger.info(f"Screenwriter Agent (Revise Scene) - LLM Input (Prompt):\n{prompt}")
             response = self.client.models.generate_content(
                 model=self.model_name,
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    temperature=0.7
+                    temperature=0.7,
+                    safety_settings=self.safety_settings
                 )
             )
+            logger.info(f"Screenwriter Agent (Revise Scene) - LLM Output (Raw Response):\n{response.text}")
             if not response.text:
                 raise ValueError("Response text empty")
-            return json.loads(response.text)
+            cleaned_text = self._clean_json_string(response.text)
+            return json.loads(cleaned_text)
         except Exception as e:
             logger.error(f"Screenwriter Agent revise_scene error: {e}")
             # Fallback
