@@ -16,6 +16,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 request_id_ctx: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "request_id", default=None
 )
@@ -46,14 +50,47 @@ class CloudJsonFormatter(logging.Formatter):
 
 
 def configure_logging() -> None:
-    """Configure process-wide JSON logging once, suitable for Cloud Logging."""
+    """Configure process-wide JSON logging, streaming to stdout and GCP Cloud Logging API."""
     root = logging.getLogger()
     if getattr(root, "_cineagent_configured", False):
         return
-    handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(CloudJsonFormatter())
+
     root.handlers.clear()
-    root.addHandler(handler)
+
+    # 1. Local stdout JSON Handler (for terminal & Cloud Run stdout ingestion)
+    stdout_handler = logging.StreamHandler(sys.stdout)
+    stdout_handler.setFormatter(CloudJsonFormatter())
+    root.addHandler(stdout_handler)
+
+    # 2. Direct GCP Cloud Logging API Network Transport (ships logs anywhere code runs)
+    project_id = os.getenv("GCP_PROJECT_ID") or os.getenv("GOOGLE_CLOUD_PROJECT")
+    disable_direct = os.getenv("DISABLE_GCP_DIRECT_LOGGING", "false").lower() == "true"
+
+    if not disable_direct and project_id:
+        try:
+            import atexit
+            import google.cloud.logging
+            from google.cloud.logging.handlers import CloudLoggingHandler
+            from google.cloud.logging_v2.handlers.transports import BackgroundThreadTransport
+
+            client = google.cloud.logging.Client(project=project_id)
+            gcp_handler = CloudLoggingHandler(
+                client,
+                name=os.getenv("K_SERVICE", "cineagent-api"),
+                transport=BackgroundThreadTransport
+            )
+            root.addHandler(gcp_handler)
+            atexit.register(gcp_handler.flush)
+
+            log_event(
+                root,
+                "gcp_direct_logging_attached",
+                project_id=project_id,
+                log_name=os.getenv("K_SERVICE", "cineagent-api"),
+            )
+        except Exception as e:
+            root.warning("Direct GCP Cloud Logging transport skipped: %s", e)
+
     root.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
     root._cineagent_configured = True  # type: ignore[attr-defined]
 

@@ -102,8 +102,20 @@ class CineAgentFilmCrew:
             usage_fields = {
                 "prompt_token_count": getattr(usage, "prompt_token_count", None),
                 "candidates_token_count": getattr(usage, "candidates_token_count", None),
+                "thoughts_token_count": getattr(usage, "thoughts_token_count", None),
                 "total_token_count": getattr(usage, "total_token_count", None),
             }
+
+            thought_text = ""
+            if response and response.candidates:
+                content = getattr(response.candidates[0], "content", None)
+                parts = getattr(content, "parts", None) if content else None
+                for part in (parts or []):
+                    if getattr(part, "thought", False) and getattr(part, "text", None):
+                        thought_text += part.text + "\n"
+
+            thought_meta = content_metadata(thought_text.strip(), "model_thoughts") if thought_text.strip() else {}
+
             log_event(
                 logger,
                 "llm_request_completed",
@@ -115,6 +127,7 @@ class CineAgentFilmCrew:
                 latency_ms=round((time.perf_counter() - started) * 1000, 2),
                 finish_reason=str(getattr(response, "finish_reason", None)),
                 **usage_fields,
+                **thought_meta,
                 **content_metadata(response_text, "response"),
             )
             if not response_text:
