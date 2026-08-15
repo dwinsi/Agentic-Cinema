@@ -9,17 +9,20 @@ This document outlines the software libraries, frameworks, APIs, and database te
 | Layer | Technology / Package | Version / Tool | Purpose in CineAgent Studio |
 | :--- | :--- | :--- | :--- |
 | **Language** | Python | `3.10+` | Core server logic, agent workflows, data orchestration |
-| **Web Framework** | FastAPI | `0.115+` | Asynchronous REST API routing, OpenAPI docs, static file serving |
-| **ASGI Server** | Uvicorn | `0.34+` | High-performance asynchronous HTTP server |
-| **Data Validation** | Pydantic | `v2` | Request/response payload schemas and validation |
-| **AI Platform** | Google Cloud Vertex AI | Gemini Enterprise | Infrastructure hosting Gemini LLM models |
-| **AI SDK** | `@google/genai` (`google-genai`) | `0.1+` | Official Google GenAI SDK for Gemini Enterprise access |
-| **AI Model** | Gemini 2.5 Flash | `gemini-2.5-flash` | Low-latency multimodal reasoning for screenplay generation |
-| **Database** | ClickHouse | Cloud / Embedded | Columnar vector database & real-time telemetry analytics |
-| **Database Client**| `clickhouse-connect` | `0.8+` | Official Python HTTP/TCP driver for ClickHouse |
-| **Environment** | `python-dotenv` | `1.0+` | Environment configuration management (`.env`) |
-| **Frontend UI** | HTML5 / CSS3 / Vanilla JS | Modern ES6+ | Dark-mode darkroom studio interface |
-| **Data Viz** | Chart.js | `4.x` CDN | Interactive script dramatic tension line charts |
+| **Web Framework** | FastAPI | `0.110+` | Asynchronous REST API routing, SSE streaming (`StreamingResponse`), OpenAPI docs |
+| **ASGI Server** | Uvicorn | `0.28+` | High-performance asynchronous HTTP server with auto-reload |
+| **Data Validation** | Pydantic | `v2.6+` | Request/response payload schemas and strict validation |
+| **AI Platform** | Google Cloud Vertex AI | Gemini Enterprise | Infrastructure hosting Gemini LLM models and embeddings |
+| **AI SDK** | `@google/genai` (`google-genai`) | `0.1.1+` | Official Google GenAI SDK for Gemini Enterprise access |
+| **LLM Model** | Gemini 2.5 Flash | `gemini-2.5-flash` | Low-latency multimodal reasoning for screenplay generation & thinking tokens |
+| **Embeddings** | Text Embedding 004 | `text-embedding-004` | 768-dimensional dense vector generation for semantic scene search |
+| **Speech AI** | Google Cloud TTS | `google-cloud-texttospeech` | Studio-grade Neural2 & Journey synthetic voice actor synthesis |
+| **Observability** | Google Cloud Logging | `google-cloud-logging` | Direct background thread log shipping to Cloud Logging & BigQuery Log Analytics |
+| **Database** | ClickHouse Cloud | ReplacingMergeTree | Columnar vector database & real-time telemetry analytics across 8 tables |
+| **Database Client**| `clickhouse-connect` | `0.7.0+` | Official Python HTTP/TCP driver for ClickHouse |
+| **Environment** | `python-dotenv` | `1.0.1+` | Environment configuration management (`.env`) |
+| **Frontend UI** | HTML5 / CSS3 / Vanilla JS | Modern ES6+ | Real-time SSE streaming consumer and cinematic dark-mode interface |
+| **Data Viz** | Chart.js | `4.x` CDN | Interactive script dramatic tension line charts & pacing curves |
 
 ---
 
@@ -34,32 +37,35 @@ flowchart TD
 
     subgraph Server["1. Application Layer (FastAPI app.py)"]
         direction TB
-        Routes["REST API Controllers & Route Handlers"]:::serverStyle
+        Routes["REST & SSE Streaming Controllers (/api/generate-film-project-stream)"]:::serverStyle
     end
 
     subgraph AI["2. AI Agent Orchestration (agents/film_crew.py)"]
         direction TB
         GenAIClient["Google GenAI SDK (google.genai.Client)"]:::aiStyle
-        JSONOutput["Structured JSON Schemas & Encoders"]:::aiStyle
-        GenAIClient --> JSONOutput
+        ParallelOrch["Parallel Dispatcher (asyncio.as_completed)"]:::aiStyle
+        GenAIClient --> ParallelOrch
     end
 
     subgraph VertexAI["3. Cloud AI Infrastructure (Google Cloud)"]
         direction TB
-        GeminiModel["Vertex AI: Gemini 2.5 Flash Model"]:::gcpStyle
+        GeminiModel["Vertex AI: Gemini 2.5 Flash Model (with Thinking Tokens)"]:::gcpStyle
+        EmbedModel["Vertex AI: text-embedding-004 (768-dim)"]:::gcpStyle
+        TTSModel["Cloud Text-to-Speech: Neural2 & Journey Voices"]:::gcpStyle
+        LogService["Cloud Logging API & Log Analytics (BigQuery)"]:::gcpStyle
     end
 
     subgraph Database["4. Data Storage & Telemetry (database/clickhouse_client.py)"]
         direction TB
         CHSDK["clickhouse-connect SDK Driver"]:::dbStyle
-        VectorArray["Array(Float32) Dense Vectors"]:::dbStyle
-        MergeTreeEngine[("ClickHouse MergeTree Columnar Storage")]:::dbStyle
-        CHSDK --> VectorArray --> MergeTreeEngine
+        Tables[("8 ClickHouse Cloud ReplacingMergeTree Tables")]:::dbStyle
+        CHSDK --> Tables
     end
 
-    Server -->|Trigger Agents| AI
-    AI -->|API Calls| VertexAI
-    Server -->|Store / Query Vectors| Database
+    Server -->|Trigger Sequential & Parallel Agents| AI
+    AI -->|API Calls & Inference| VertexAI
+    Server -->|Persist Complete Production Data| Database
+    Server -.->|Ship Structured JSON Logs| LogService
 
     style Server fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f8fafc;
     style AI fill:#1e1b4b,stroke:#c084fc,stroke-width:2px,color:#f8fafc;
@@ -71,47 +77,18 @@ flowchart TD
 
 ## 📦 Component Integration Details
 
-### 1. FastAPI + Pydantic Layer (`app.py`)
-- FastAPI handles incoming requests from the browser client.
-- Pydantic models validate request payloads (`FilmConceptRequest`, `VectorSearchRequest`):
-  ```python
-  class FilmConceptRequest(BaseModel):
-      premise: str
-      genre: str = "Sci-Fi Thriller"
-      tone: str = "Cinematic & High Tension"
-  ```
-- Serves static assets (`/static`) including `index.html`, style assets, and JavaScript controllers.
+### 1. Server-Sent Events (SSE) Streaming (`app.py`)
+- Uses FastAPI's `StreamingResponse` with `media_type="text/event-stream"`.
+- Yields incremental typed event packets (`agent_start`, `film_bible`, `scenes`, `storyboards`, `production_design`, `audio_post`, `analytics`, `complete`).
 
-### 2. Google GenAI SDK Integration (`agents/film_crew.py`)
-- CineAgent Studio uses the modern official **Google GenAI SDK**:
-  ```python
-  from google import genai
-  from google.genai import types
+### 2. Google GenAI SDK & Thinking Telemetry (`agents/film_crew.py`)
+- Instantiates `genai.Client(vertexai=True, project=PROJECT_ID, location="us-central1")`.
+- Captures `usage_metadata.thoughts_token_count`, `prompt_token_count`, `candidates_token_count`, and `total_token_count` for granular reasoning analytics.
 
-  client = genai.Client(
-      enterprise=True,
-      project=PROJECT_ID,
-      location="us-central1"
-  )
-  ```
-- **Structured JSON Schema Output**: Prompt configs enforce `response_mime_type="application/json"` to ensure the model responds strictly with clean, parseable JSON arrays and objects without markdown formatting issues.
+### 3. ClickHouse Cloud Normalized Persistence (`database/clickhouse_client.py`)
+- Batch-inserts rows into 8 tables: `projects`, `scenes`, `dialogues`, `storyboards`, `production_design`, `audio_post`, `generated_images`, and `actor_voice_vault`.
+- Excludes temporary fallback SVGs to ensure only real generated concept frames are persisted.
 
-### 3. ClickHouse Vector Storage Integration (`database/clickhouse_client.py`)
-- Connects using `clickhouse-connect`:
-  ```python
-  import clickhouse_connect
-
-  client = clickhouse_connect.get_client(
-      host=CLICKHOUSE_HOST,
-      port=CLICKHOUSE_PORT,
-      username=CLICKHOUSE_USER,
-      password=CLICKHOUSE_PASSWORD,
-      secure=True
-  )
-  ```
-- Scenes and dialogues are stored in ClickHouse tables (`scenes`, `dialogues`).
-- Embeddings are stored as native `Array(Float32)` columns, allowing for fast analytical aggregations and vector similarity matching.
-
-### 4. Frontend UI & Telemetry Visualization (`static/`)
-- A single-page web interface built with vanilla HTML/CSS/JS.
-- Integrates **Chart.js** to fetch `/api/analytics` telemetry data and render dynamic dramatic tension line graphs across screenplay acts.
+### 4. Direct GCP Cloud Logging API Transport (`observability.py`)
+- Uses `google.cloud.logging.handlers.CloudLoggingHandler` with asynchronous `BackgroundThreadTransport`.
+- Ensures zero overhead on request latency and enables SQL querying in **GCP Log Analytics**.
