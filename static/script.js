@@ -276,7 +276,7 @@ document.addEventListener("DOMContentLoaded", () => {
         previewEl.innerHTML = `
             <div class="sb-loading-icon">
                 <i class="fa-solid fa-wand-magic-sparkles fa-beat-fade"></i>
-                <span>Generating Frame with Imagen 3…</span>
+                <span>Rendering Concept Frame…</span>
             </div>
         `;
         try {
@@ -309,13 +309,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
             return data.image_url;
         } catch (err) {
-            console.warn("Imagen generation fallback:", err);
+            console.warn("Storyboard frame generation fallback:", err);
             previewEl.classList.remove("sb-loading");
             previewEl.classList.add("sb-error");
             previewEl.innerHTML = `
                 <div class="sb-error-icon">
                     <i class="fa-solid fa-camera"></i>
-                    <span>Imagen Frame Preview</span>
+                    <span>Storyboard Frame Preview</span>
                 </div>
             `;
             return null;
