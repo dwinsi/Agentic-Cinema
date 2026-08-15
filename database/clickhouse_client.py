@@ -44,7 +44,8 @@ class ClickHouseManager:
                     port=self.port,
                     username=self.user,
                     password=self.password,
-                    secure=self.secure
+                    secure=self.secure,
+                    verify=False
                 )
                 # Test ping connection
                 ping_res = self.client.ping()
@@ -83,13 +84,60 @@ class ClickHouseManager:
             self.client.command("""
             CREATE TABLE IF NOT EXISTS dialogues (
                 dialogue_id String,
-                character String,
-                line String,
-                emotion String,
-                scene_id String,
-                embedding Array(Float32)
-            ) ENGINE = MergeTree()
-            ORDER BY dialogue_id
+                project_id  String DEFAULT '',
+                scene_id    String,
+                character   String,
+                line        String,
+                emotion     String,
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, dialogue_id)
+            """)
+
+            # Ensure project_id column exists if table was created previously
+            try:
+                self.client.command("ALTER TABLE dialogues ADD COLUMN IF NOT EXISTS project_id String DEFAULT ''")
+            except Exception:
+                pass
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS storyboards (
+                storyboard_id String,
+                project_id    String,
+                scene_id      String DEFAULT '',
+                title         String,
+                shot_type     String,
+                image_prompt  String,
+                image_url     String DEFAULT '',
+                created_at    DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, storyboard_id)
+            """)
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS production_design (
+                design_id     String,
+                project_id    String,
+                scene_id      String DEFAULT '',
+                set_design    String,
+                key_prop      String,
+                costume_notes String,
+                created_at    DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, design_id)
+            """)
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS audio_post (
+                audio_id         String,
+                project_id       String,
+                scene_id         String DEFAULT '',
+                soundtrack_theme String,
+                foley_effects    String,
+                audio_cue        String,
+                created_at       DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, audio_id)
             """)
 
             self.client.command("""
@@ -139,9 +187,52 @@ class ClickHouseManager:
             ORDER BY project_id
             """)
 
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS generated_images (
+                image_id      String,
+                project_id    String DEFAULT '',
+                storyboard_id String DEFAULT '',
+                prompt        String,
+                model         String,
+                image_url     String,
+                created_at    DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, image_id)
+            """)
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS actor_voice_vault (
+                voice_id          String,
+                name              String,
+                gender            String,
+                accent            String,
+                archetype         String,
+                voice_type        String DEFAULT 'synthetic',
+                sample_text       String,
+                sample_audio_url  String DEFAULT '',
+                gcp_voice_name    String,
+                created_at        DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY voice_id
+            """)
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS dialogue_audio (
+                audio_id          String,
+                project_id        String DEFAULT '',
+                character         String,
+                voice_id          String,
+                text              String,
+                audio_url         String,
+                created_at        DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY (project_id, audio_id)
+            """)
+
             log_event(logger, "clickhouse_schema_ready",
-                      tables=["scenes", "dialogues", "script_documents",
-                               "uploaded_scripts", "projects"])
+                      tables=["scenes", "dialogues", "storyboards", "production_design",
+                              "audio_post", "generated_images", "actor_voice_vault", "dialogue_audio",
+                              "script_documents", "uploaded_scripts", "projects"])
         except Exception:
             logger.exception("ClickHouse schema setup failed")
 
@@ -182,9 +273,10 @@ class ClickHouseManager:
         started = time.perf_counter()
         if not self.use_mock and self.client:
             try:
-                self.client.command(
-                    "INSERT INTO scenes (scene_id, title, heading, description, tension_score, pacing_tag, embedding) VALUES",
-                    [[scene_id, title, heading, description, tension, pacing, vector]]
+                self.client.insert(
+                    "scenes",
+                    [[scene_id, title, heading, description, tension, pacing, vector]],
+                    column_names=["scene_id", "title", "heading", "description", "tension_score", "pacing_tag", "embedding"]
                 )
                 log_event(logger, "clickhouse_scene_inserted", scene_id=scene_id, engine="live",
                           vector_dimension=len(vector), latency_ms=round((time.perf_counter() - started) * 1000, 2))
@@ -204,6 +296,251 @@ class ClickHouseManager:
         })
         log_event(logger, "clickhouse_scene_inserted", scene_id=scene_id, engine="embedded",
                   vector_dimension=len(vector), latency_ms=round((time.perf_counter() - started) * 1000, 2))
+
+    def insert_dialogues(self, dialogues: List[Dict[str, Any]], project_id: str = ""):
+        """Store screenplay dialogues into ClickHouse."""
+        if not dialogues:
+            return
+        if not self.use_mock and self.client:
+            try:
+                rows = [
+                    [
+                        d.get("dialogue_id") or f"diag-{i+1}",
+                        project_id or "",
+                        d.get("scene_id") or "",
+                        d.get("character") or "UNKNOWN",
+                        d.get("line") or "",
+                        d.get("emotion") or ""
+                    ]
+                    for i, d in enumerate(dialogues)
+                ]
+                self.client.insert(
+                    "dialogues",
+                    rows,
+                    column_names=["dialogue_id", "project_id", "scene_id", "character", "line", "emotion"]
+                )
+                log_event(logger, "clickhouse_dialogues_inserted", count=len(rows), engine="live")
+            except Exception:
+                logger.exception("ClickHouse dialogues insert failed")
+
+    def insert_storyboards(self, storyboards: Any, project_id: str = ""):
+        """Store storyboard visual shot specs into ClickHouse."""
+        if not storyboards or not isinstance(storyboards, (list, tuple)):
+            return
+        if not self.use_mock and self.client:
+            try:
+                rows = [
+                    [
+                        sb.get("storyboard_id") or f"sb-{i+1}",
+                        project_id or "",
+                        sb.get("scene_id") or f"sc-{i+1}",
+                        sb.get("title") or f"Shot {i+1}",
+                        sb.get("shot_type") or "WIDE SHOT",
+                        sb.get("image_prompt") or "",
+                        sb.get("image_url") or ""
+                    ]
+                    for i, sb in enumerate(storyboards)
+                    if isinstance(sb, dict)
+                ]
+                if rows:
+                    self.client.insert(
+                        "storyboards",
+                        rows,
+                        column_names=["storyboard_id", "project_id", "scene_id", "title", "shot_type", "image_prompt", "image_url"]
+                    )
+                    log_event(logger, "clickhouse_storyboards_inserted", count=len(rows), engine="live")
+            except Exception:
+                logger.exception("ClickHouse storyboards insert failed")
+
+    def insert_production_designs(self, designs: Any, project_id: str = ""):
+        """Store production design specs (sets, props, costumes) into ClickHouse."""
+        if not designs or not isinstance(designs, (list, tuple)):
+            return
+        if not self.use_mock and self.client:
+            try:
+                rows = [
+                    [
+                        pd.get("design_id") or f"pd-{i+1}",
+                        project_id or "",
+                        pd.get("scene_id") or f"sc-{i+1}",
+                        pd.get("set_design") or "",
+                        pd.get("key_prop") or "",
+                        pd.get("costume_notes") or ""
+                    ]
+                    for i, pd in enumerate(designs)
+                    if isinstance(pd, dict)
+                ]
+                if rows:
+                    self.client.insert(
+                        "production_design",
+                        rows,
+                        column_names=["design_id", "project_id", "scene_id", "set_design", "key_prop", "costume_notes"]
+                    )
+                    log_event(logger, "clickhouse_production_design_inserted", count=len(rows), engine="live")
+            except Exception:
+                logger.exception("ClickHouse production design insert failed")
+
+    def insert_audio_posts(self, audio_list: Any, project_id: str = ""):
+        """Store audio and soundtrack designs into ClickHouse."""
+        if not audio_list or not isinstance(audio_list, (list, tuple)):
+            return
+        if not self.use_mock and self.client:
+            try:
+                rows = [
+                    [
+                        ap.get("audio_id") or f"audio-{i+1}",
+                        project_id or "",
+                        ap.get("scene_id") or f"sc-{i+1}",
+                        ap.get("soundtrack_theme") or "",
+                        ap.get("foley_effects") or "",
+                        ap.get("audio_cue") or ""
+                    ]
+                    for i, ap in enumerate(audio_list)
+                    if isinstance(ap, dict)
+                ]
+                if rows:
+                    self.client.insert(
+                        "audio_post",
+                        rows,
+                        column_names=["audio_id", "project_id", "scene_id", "soundtrack_theme", "foley_effects", "audio_cue"]
+                    )
+                    log_event(logger, "clickhouse_audio_post_inserted", count=len(rows), engine="live")
+            except Exception:
+                logger.exception("ClickHouse audio post insert failed")
+
+    def insert_generated_image(self, image_id: str, prompt: str, model: str, image_url: str,
+                               project_id: str = "", storyboard_id: str = ""):
+        """
+        Persist AI generated image metadata to ClickHouse.
+        Fallback SVG images are never passed here and never stored.
+        """
+        if not image_url or image_url.endswith(".svg"):
+            return
+        if not self.use_mock and self.client:
+            try:
+                self.client.insert(
+                    "generated_images",
+                    [[image_id, project_id or "", storyboard_id or "", prompt, model, image_url]],
+                    column_names=["image_id", "project_id", "storyboard_id", "prompt", "model", "image_url"]
+                )
+                log_event(logger, "clickhouse_generated_image_persisted", image_id=image_id, model=model, engine="live")
+            except Exception:
+                logger.exception("ClickHouse generated_image insert failed")
+
+    # ──────────────────────────────────────────────────────────────
+    # Actor & Voice Vault (Synthetic & Real Actor Profiles)
+    # ──────────────────────────────────────────────────────────────
+
+    def seed_voice_vault_if_empty(self) -> None:
+        """Seed a rich cinematic roster of synthetic voice profiles if table is empty."""
+        default_voices = [
+            ("voice-us-journey-d", "Marcus Vance (Noir Grit)", "MALE", "American General", "Protagonist / Anti-Hero", "synthetic", "The truth is out there, buried beneath neon and rain.", "", "en-US-Journey-D"),
+            ("voice-us-journey-f", "Evelyn Cross (Commanding)", "FEMALE", "American General", "Protagonist / Commander", "synthetic", "We execute the mission on my mark. No deviations.", "", "en-US-Journey-F"),
+            ("voice-gb-neural-b", "Arthur Pendelton (Refined RP)", "MALE", "British RP", "Mentor / Diplomat", "synthetic", "History is written not by the swift, but by the relentless.", "", "en-GB-Neural2-B"),
+            ("voice-gb-neural-a", "Victoria Sterling (Aristocratic)", "FEMALE", "British RP", "Antagonist / Executive", "synthetic", "Power is not given, my dear. It is taken.", "", "en-GB-Neural2-A"),
+            ("voice-au-neural-b", "Kaelen Holt (Outback Scout)", "MALE", "Australian", "Rogue / Survivor", "synthetic", "Keep your head down and your eyes on the horizon.", "", "en-AU-Neural2-B"),
+            ("voice-us-neural-f", "Sora Tanaka (Cybernetic Intel)", "FEMALE", "American / Pacific", "Tech Specialist / Agent", "synthetic", "System handshake verified. Encryption cracked in zero-point-two seconds.", "", "en-US-Neural2-F"),
+            ("voice-us-journey-o", "Devin Ray (Warm Companion)", "MALE", "American Warm", "Ally / Support", "synthetic", "I've got your back. Whatever comes through that door.", "", "en-US-Journey-O"),
+            ("voice-in-neural-d", "Aarav Sharma (Strategic Lead)", "MALE", "Indian English", "Tactician / Officer", "synthetic", "All parameters are calibrated. Proceeding with phase two.", "", "en-IN-Neural2-D"),
+            ("voice-in-neural-a", "Kiran Patel (Precise Analyst)", "FEMALE", "Indian English", "Science Officer", "synthetic", "The telemetry indicates an anomalous energy signature.", "", "en-IN-Neural2-A"),
+            ("voice-us-studio-o", "AURA-9 (Synthetic AI)", "NEUTRAL", "Studio Pure", "Artificial Intelligence", "synthetic", "Neural link stabilized. Awaiting director instructions.", "", "en-US-Studio-O"),
+        ]
+
+        if not self.use_mock and self.client:
+            try:
+                count = self.client.query("SELECT count() FROM actor_voice_vault").result_rows[0][0]
+                if count == 0:
+                    self.client.insert(
+                        "actor_voice_vault",
+                        default_voices,
+                        column_names=["voice_id", "name", "gender", "accent", "archetype", "voice_type", "sample_text", "sample_audio_url", "gcp_voice_name"]
+                    )
+                    log_event(logger, "voice_vault_seeded", count=len(default_voices), engine="live")
+            except Exception:
+                logger.exception("Failed to seed voice vault in ClickHouse")
+
+    def list_voice_vault(self) -> List[Dict[str, Any]]:
+        """Return all voice profiles (synthetic and real actor samples)."""
+        if not self.use_mock and self.client:
+            try:
+                result = self.client.query("""
+                    SELECT voice_id, name, gender, accent, archetype, voice_type,
+                           sample_text, sample_audio_url, gcp_voice_name, created_at
+                    FROM actor_voice_vault FINAL
+                    ORDER BY name ASC
+                """)
+                rows = []
+                for r in result.result_rows:
+                    rows.append({
+                        "voice_id": r[0],
+                        "name": r[1],
+                        "gender": r[2],
+                        "accent": r[3],
+                        "archetype": r[4],
+                        "voice_type": r[5],
+                        "sample_text": r[6],
+                        "sample_audio_url": r[7],
+                        "gcp_voice_name": r[8],
+                        "created_at": str(r[9]),
+                    })
+                return rows
+            except Exception:
+                logger.exception("ClickHouse list_voice_vault failed")
+
+        return [
+            {
+                "voice_id": "voice-us-journey-d", "name": "Marcus Vance (Noir Grit)",
+                "gender": "MALE", "accent": "American General", "archetype": "Protagonist / Anti-Hero",
+                "voice_type": "synthetic", "sample_text": "The truth is out there, buried beneath neon and rain.",
+                "sample_audio_url": "", "gcp_voice_name": "en-US-Journey-D", "created_at": ""
+            },
+            {
+                "voice_id": "voice-us-journey-f", "name": "Evelyn Cross (Commanding)",
+                "gender": "FEMALE", "accent": "American General", "archetype": "Protagonist / Commander",
+                "voice_type": "synthetic", "sample_text": "We execute the mission on my mark. No deviations.",
+                "sample_audio_url": "", "gcp_voice_name": "en-US-Journey-F", "created_at": ""
+            }
+        ]
+
+    def register_character_voice(self, name: str, gender: str, gcp_voice_name: str,
+                                 accent: str = "", archetype: str = "",
+                                 sample_text: str = "", sample_audio_url: str = "",
+                                 voice_type: str = "synthetic") -> None:
+        """
+        Dynamically register or update a character's voice in actor_voice_vault.
+        Upserts the profile so the voice database organically grows with every project.
+        """
+        if not name:
+            return
+        slug = "".join([c.lower() if c.isalnum() else "_" for c in name]).strip("_")
+        voice_id = f"voice-char-{slug}"
+        accent = accent or ("British RP" if "en-GB" in (gcp_voice_name or "") else "Indian English" if "en-IN" in (gcp_voice_name or "") else "Australian" if "en-AU" in (gcp_voice_name or "") else "American General")
+        sample_text = sample_text or f"Character dialogue profile for {name}."
+
+        if not self.use_mock and self.client:
+            try:
+                self.client.insert(
+                    "actor_voice_vault",
+                    [[voice_id, name, gender.upper() if gender else "MALE", accent, archetype or "Character Voice", voice_type, sample_text, sample_audio_url or "", gcp_voice_name or "en-US-Journey-D"]],
+                    column_names=["voice_id", "name", "gender", "accent", "archetype", "voice_type", "sample_text", "sample_audio_url", "gcp_voice_name"]
+                )
+                log_event(logger, "character_voice_registered", name=name, voice_id=voice_id, gcp_voice=gcp_voice_name, engine="live")
+            except Exception:
+                logger.exception("Failed to register character voice in ClickHouse")
+
+    def insert_dialogue_audio(self, audio_id: str, character: str, voice_id: str,
+                              text: str, audio_url: str, project_id: str = ""):
+        """Persist synthesized dialogue audio performance take to ClickHouse."""
+        if not self.use_mock and self.client:
+            try:
+                self.client.insert(
+                    "dialogue_audio",
+                    [[audio_id, project_id or "", character, voice_id, text, audio_url]],
+                    column_names=["audio_id", "project_id", "character", "voice_id", "text", "audio_url"]
+                )
+                log_event(logger, "dialogue_audio_persisted", audio_id=audio_id, character=character, engine="live")
+            except Exception:
+                logger.exception("ClickHouse dialogue_audio insert failed")
 
     def vector_search_scenes(self, query_vector: List[float], limit: int = 3) -> List[Dict[str, Any]]:
         """Perform vector similarity search across ClickHouse scenes."""
@@ -319,10 +656,10 @@ class ClickHouseManager:
         started = time.perf_counter()
         if not self.use_mock and self.client:
             try:
-                self.client.command(
-                    "INSERT INTO script_documents "
-                    "(doc_id, title, chunk_index, chunk_text, embedding) VALUES",
-                    [[doc_id, title, chunk_index, chunk_text, embedding]]
+                self.client.insert(
+                    "script_documents",
+                    [[doc_id, title, chunk_index, chunk_text, embedding]],
+                    column_names=["doc_id", "title", "chunk_index", "chunk_text", "embedding"]
                 )
                 log_event(logger, "script_document_inserted", doc_id=doc_id,
                           chunk_index=chunk_index, vector_dim=len(embedding),
@@ -424,16 +761,18 @@ class ClickHouseManager:
         }
         if not self.use_mock and self.client:
             try:
-                self.client.command(
-                    "INSERT INTO uploaded_scripts "
-                    "(doc_id, filename, mime_type, title, logline, genre, tone, "
-                    "characters_json, themes_json, chunk_count, vertex_indexed) VALUES",
+                self.client.insert(
+                    "uploaded_scripts",
                     [[
                         row["doc_id"], row["filename"], row["mime_type"],
                         row["title"], row["logline"], row["genre"], row["tone"],
                         row["characters_json"], row["themes_json"],
                         row["chunk_count"], row["vertex_indexed"],
-                    ]]
+                    ]],
+                    column_names=[
+                        "doc_id", "filename", "mime_type", "title", "logline", "genre", "tone",
+                        "characters_json", "themes_json", "chunk_count", "vertex_indexed"
+                    ]
                 )
                 log_event(logger, "uploaded_script_saved", doc_id=doc_id, engine="live",
                           latency_ms=round((time.perf_counter() - started) * 1000, 2))
@@ -559,11 +898,11 @@ class ClickHouseManager:
         started = time.perf_counter()
         if not self.use_mock and self.client:
             try:
-                self.client.command(
-                    "INSERT INTO projects "
-                    "(project_id, title, genre, tone, premise, grounded, doc_id, project_json) VALUES",
+                self.client.insert(
+                    "projects",
                     [[project_id, title, genre, tone, premise,
-                      1 if grounded else 0, doc_id or "", project_json]]
+                      1 if grounded else 0, doc_id or "", project_json]],
+                    column_names=["project_id", "title", "genre", "tone", "premise", "grounded", "doc_id", "project_json"]
                 )
                 log_event(logger, "project_saved", project_id=project_id, engine="live",
                           latency_ms=round((time.perf_counter() - started) * 1000, 2))

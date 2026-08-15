@@ -1,10 +1,11 @@
 import os
 import logging
 import time
+import asyncio
 from typing import Dict, Any, List, Optional
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 import json
 
@@ -77,9 +78,13 @@ class TTSRequest(BaseModel):
     character: str
     voice_id: str = "en-US-Journey-D"
     gender: str = "MALE"
+    project_id: str = ""
 
 class GenerateImageRequest(BaseModel):
     prompt: str
+    project_id: str = ""
+    storyboard_id: str = ""
+    title: str = ""
 
 @app.get("/", response_class=HTMLResponse)
 async def get_index():
@@ -120,19 +125,20 @@ async def generate_film_project(req: FilmConceptRequest):
         # Step 2: Run Screenwriter Agent
         scenes = film_crew.run_screenwriter(film_bible)
 
-        # Step 3: Run Storyboard Director Agent
-        storyboards = film_crew.run_storyboard_director(scenes)
+        # Steps 3-6: Run Storyboard, Production Designer, Audio, and Market Analyst in PARALLEL
+        res_storyboards, res_production, res_audio, res_analytics = await asyncio.gather(
+            asyncio.to_thread(film_crew.run_storyboard_director, scenes),
+            asyncio.to_thread(film_crew.run_production_designer, film_bible, scenes),
+            asyncio.to_thread(film_crew.run_audio_department, scenes),
+            asyncio.to_thread(film_crew.run_market_analyst, film_bible, scenes),
+        )
+        storyboards: List[Dict[str, Any]] = res_storyboards if isinstance(res_storyboards, list) else []
+        production_design: List[Dict[str, Any]] = res_production if isinstance(res_production, list) else []
+        audio_post: List[Dict[str, Any]] = res_audio if isinstance(res_audio, list) else []
+        analytics: Dict[str, Any] = res_analytics if isinstance(res_analytics, dict) else {}
 
-        # Step 4: Run Production Designer Agent
-        production_design = film_crew.run_production_designer(film_bible, scenes)
-
-        # Step 5: Run Audio & Post-Production Agent
-        audio_post = film_crew.run_audio_department(scenes)
-
-        # Step 6: Run Market Analyst Agent
-        analytics = film_crew.run_market_analyst(film_bible, scenes)
-
-        # Step 7: Index Scenes into ClickHouse with real text-embedding-004 vectors
+        # Step 7: Index Scenes and Dialogues into ClickHouse
+        all_dialogues = []
         for idx, scene in enumerate(scenes):
             scene_id = scene.get("scene_id") or f"sc-{idx+1}"
             title    = scene.get("title") or f"Scene {idx+1}"
@@ -152,11 +158,37 @@ async def generate_film_project(req: FilmConceptRequest):
                 vector=vector
             )
 
+            # Collect dialogues for ClickHouse dialogues table
+            for d in scene.get("dialogue", []):
+                all_dialogues.append({
+                    "dialogue_id": f"diag-{uuid.uuid4().hex[:8]}",
+                    "scene_id": scene_id,
+                    "character": d.get("character") or "UNKNOWN",
+                    "line": d.get("line") or "",
+                    "emotion": d.get("emotion") or ""
+                })
+
+        project_id = uuid.uuid4().hex
+
+        # Step 8: Persist all department assets to ClickHouse tables
+        ch_manager.insert_dialogues(all_dialogues, project_id=project_id)
+        ch_manager.insert_storyboards(storyboards, project_id=project_id)
+        ch_manager.insert_production_designs(production_design, project_id=project_id)
+        ch_manager.insert_audio_posts(audio_post, project_id=project_id)
+
+        # Step 9: Auto-register character voices into ClickHouse Voice Vault
+        for c in film_bible.get("characters", []):
+            ch_manager.register_character_voice(
+                name=c.get("name") or "Unnamed Character",
+                gender=c.get("gender") or "MALE",
+                gcp_voice_name=c.get("voice_id") or "en-US-Journey-D",
+                archetype=c.get("role") or c.get("archetype_description") or "Cast Member",
+                sample_text=f"Dialogue track for {c.get('name')} in {film_bible.get('title', 'Film')}."
+            )
 
         log_event(logger, "film_project_completed", scene_count=len(scenes),
                   grounded=bool(script_context))
 
-        project_id = uuid.uuid4().hex
         project_payload = {
             "film_bible": film_bible,
             "scenes": scenes,
@@ -168,7 +200,7 @@ async def generate_film_project(req: FilmConceptRequest):
             "grounded": bool(script_context),
         }
 
-        # Auto-save to projects table
+        # Auto-save full project state to projects table
         ch_manager.save_project(
             project_id=project_id,
             title=film_bible.get("title") or "Untitled",
@@ -188,6 +220,161 @@ async def generate_film_project(req: FilmConceptRequest):
     except Exception:
         logger.exception("Film project generation failed")
         raise HTTPException(status_code=500, detail="Film project generation failed")
+
+
+@app.post("/api/generate-film-project-stream")
+async def generate_film_project_stream(req: FilmConceptRequest):
+    """
+    Executes multi-agent film production workflow and streams results incrementally via Server-Sent Events (SSE).
+    """
+    async def event_generator():
+        try:
+            log_event(logger, "film_project_stream_requested", genre=req.genre, tone=req.tone,
+                      doc_id=req.doc_id or None, **content_metadata(req.premise, "premise"))
+
+            # Step 0: RAG Grounding
+            script_context = ""
+            if req.doc_id:
+                yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'rag', 'message': 'Retrieving screenplay canon from Vertex AI Search...'})}\n\n"
+                passages = script_processor.retrieve_from_vertex_search(req.premise, top_k=3)
+                if passages:
+                    script_context = "\n\n".join(passages)
+                    log_event(logger, "rag_grounding_applied", doc_id=req.doc_id, passage_count=len(passages))
+
+            # Step 1: Executive Producer / Showrunner Agent
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'showrunner', 'message': 'Showrunner conceiving Film Bible & World Rules...'})}\n\n"
+            film_bible = await asyncio.to_thread(
+                film_crew.run_executive_producer,
+                req.premise, req.genre, req.tone, script_context=script_context
+            )
+            yield f"data: {json.dumps({'type': 'film_bible', 'data': film_bible})}\n\n"
+
+            # Step 2: Screenwriter Agent
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'screenwriter', 'message': 'Screenwriter drafting authentic 3-act scenes and dialogue...'})}\n\n"
+            scenes = await asyncio.to_thread(film_crew.run_screenwriter, film_bible)
+            yield f"data: {json.dumps({'type': 'scenes', 'data': scenes})}\n\n"
+
+            # Steps 3-6: Run all 4 specialist departments in PARALLEL and stream results as each completes!
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'storyboard', 'message': 'Parallel: Storyboard framing camera shots...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'production_design', 'message': 'Parallel: Production Designer drafting sets & costumes...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'audio', 'message': 'Parallel: Audio composing soundtrack & foley cues...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'analyst', 'message': 'Parallel: Market Analyst calculating metrics...'})}\n\n"
+
+            async def task_storyboard():
+                res = await asyncio.to_thread(film_crew.run_storyboard_director, scenes)
+                return ("storyboards", res)
+
+            async def task_production():
+                res = await asyncio.to_thread(film_crew.run_production_designer, film_bible, scenes)
+                return ("production_design", res)
+
+            async def task_audio():
+                res = await asyncio.to_thread(film_crew.run_audio_department, scenes)
+                return ("audio_post", res)
+
+            async def task_analyst():
+                res = await asyncio.to_thread(film_crew.run_market_analyst, film_bible, scenes)
+                return ("analytics", res)
+
+            storyboards: List[Dict[str, Any]] = []
+            production_design: List[Dict[str, Any]] = []
+            audio_post: List[Dict[str, Any]] = []
+            analytics: Dict[str, Any] = {}
+
+            tasks = [
+                asyncio.create_task(task_storyboard()),
+                asyncio.create_task(task_production()),
+                asyncio.create_task(task_audio()),
+                asyncio.create_task(task_analyst()),
+            ]
+
+            # Yield each department the instant it finishes!
+            for future in asyncio.as_completed(tasks):
+                event_type, result_data = await future
+                if event_type == "storyboards" and isinstance(result_data, list):
+                    storyboards = result_data
+                elif event_type == "production_design" and isinstance(result_data, list):
+                    production_design = result_data
+                elif event_type == "audio_post" and isinstance(result_data, list):
+                    audio_post = result_data
+                elif event_type == "analytics" and isinstance(result_data, dict):
+                    analytics = result_data
+                yield f"data: {json.dumps({'type': event_type, 'data': result_data})}\n\n"
+
+            # Step 7: ClickHouse Persistence & Indexing
+            yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'database', 'message': 'Indexing scenes and persisting assets to ClickHouse Cloud...'})}\n\n"
+            all_dialogues = []
+            for idx, scene in enumerate(scenes):
+                scene_id = scene.get("scene_id") or f"sc-{idx+1}"
+                title    = scene.get("title") or f"Scene {idx+1}"
+                heading  = scene.get("heading") or "INT. SET - DAY"
+                desc     = scene.get("description") or title
+                pacing   = scene.get("pacing_tag") or "BUILD"
+                tension  = float(scene.get("tension_score") or 5.0)
+
+                vector = script_processor.embed_text(desc)
+                ch_manager.insert_scene(
+                    scene_id=scene_id,
+                    title=title,
+                    heading=heading,
+                    description=desc,
+                    tension=tension,
+                    pacing=pacing,
+                    vector=vector
+                )
+
+                for d in scene.get("dialogue", []):
+                    all_dialogues.append({
+                        "dialogue_id": f"diag-{uuid.uuid4().hex[:8]}",
+                        "scene_id": scene_id,
+                        "character": d.get("character") or "UNKNOWN",
+                        "line": d.get("line") or "",
+                        "emotion": d.get("emotion") or ""
+                    })
+
+            project_id = uuid.uuid4().hex
+            ch_manager.insert_dialogues(all_dialogues, project_id=project_id)
+            ch_manager.insert_storyboards(storyboards, project_id=project_id)
+            ch_manager.insert_production_designs(production_design, project_id=project_id)
+            ch_manager.insert_audio_posts(audio_post, project_id=project_id)
+
+            for c in film_bible.get("characters", []):
+                ch_manager.register_character_voice(
+                    name=c.get("name") or "Unnamed Character",
+                    gender=c.get("gender") or "MALE",
+                    gcp_voice_name=c.get("voice_id") or "en-US-Journey-D",
+                    archetype=c.get("role") or c.get("archetype_description") or "Cast Member",
+                    sample_text=f"Dialogue track for {c.get('name')} in {film_bible.get('title', 'Film')}."
+                )
+
+            project_payload = {
+                "film_bible": film_bible,
+                "scenes": scenes,
+                "storyboards": storyboards,
+                "production_design": production_design,
+                "audio_post": audio_post,
+                "analytics": analytics,
+                "clickhouse_indexed_scenes": len(scenes),
+                "grounded": bool(script_context),
+            }
+
+            ch_manager.save_project(
+                project_id=project_id,
+                title=film_bible.get("title") or "Untitled",
+                genre=req.genre,
+                tone=req.tone,
+                premise=req.premise,
+                grounded=bool(script_context),
+                doc_id=req.doc_id or "",
+                project_json=json.dumps(project_payload),
+            )
+
+            yield f"data: {json.dumps({'type': 'complete', 'project_id': project_id, 'project': project_payload})}\n\n"
+        except Exception as err:
+            logger.exception("Streaming film project generation failed")
+            yield f"data: {json.dumps({'type': 'error', 'message': str(err)})}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @app.post("/api/upload-script")
@@ -469,65 +656,119 @@ async def generate_tts(req: TTSRequest):
         with open(filepath, "wb") as out:
             out.write(response.audio_content)
 
+        audio_url = f"/static/audio/{filename}"
+
+        # Persist dialogue audio performance to ClickHouse
+        audio_id = f"aud-{uuid.uuid4().hex[:8]}"
+        ch_manager.insert_dialogue_audio(
+            audio_id=audio_id,
+            character=req.character,
+            voice_id=req.voice_id,
+            text=req.text,
+            audio_url=audio_url,
+            project_id=req.project_id
+        )
+
         log_event(logger, "tts_generation_completed", voice_id=req.voice_id,
                   latency_ms=round((time.perf_counter() - started) * 1000, 2),
                   audio_bytes=len(response.audio_content))
-        return JSONResponse({"status": "success", "audio_url": f"/static/audio/{filename}"})
+        return JSONResponse({"status": "success", "audio_url": audio_url})
     except Exception:
         logger.exception("TTS generation failed")
         raise HTTPException(status_code=500, detail="TTS generation failed")
 
+@app.get("/api/voice-vault")
+async def get_voice_vault():
+    """Returns available actor and synthetic voice profiles from ClickHouse Voice Vault."""
+    try:
+        voices = ch_manager.list_voice_vault()
+        return JSONResponse({"status": "success", "voices": voices})
+    except Exception:
+        logger.exception("Failed to retrieve voice vault")
+        raise HTTPException(status_code=500, detail="Failed to fetch voice vault")
+
 @app.post("/api/generate-image")
 async def generate_image(req: GenerateImageRequest):
-    """Generates a storyboard image using GCP Imagen 3 (with graceful fallback)."""
+    """Generates a storyboard image using GCP Vertex AI Image Generation (Gemini Image & Imagen with graceful fallback)."""
     try:
         from agents.film_crew import get_gemini_client
         from google.genai import types
         
         image_bytes = None
-        image_provider = "vertex_imagen"
+        image_provider = "vertex_ai_image"
         model_used = None
+        ext = "jpg"
         started = time.perf_counter()
-        log_event(logger, "image_generation_started", models_tried=["imagen-3.0-generate-002", "imagen-3.0-generate-001"],
+        
+        models_to_try = [
+            "gemini-2.5-flash-image",
+            "gemini-3.1-flash-image",
+            "imagen-3.0-generate-002",
+            "imagen-3.0-generate-001"
+        ]
+        
+        log_event(logger, "image_generation_started", models_tried=models_to_try,
                   **content_metadata(req.prompt, "image_prompt"))
 
-        # Try Imagen model versions in preference order — whichever is quota-enabled on this project
-        for imagen_model in ["imagen-3.0-generate-002", "imagen-3.0-generate-001"]:
+        client = get_gemini_client()
+
+        for model_candidate in models_to_try:
             try:
-                client = get_gemini_client()
-                response = client.models.generate_images(
-                    model=imagen_model,
-                    prompt=req.prompt + ", highly detailed cinematic storyboard sketch, masterpiece",
-                    config=types.GenerateImagesConfig(
-                        number_of_images=1,
-                        output_mime_type="image/jpeg",
-                        aspect_ratio="16:9"
+                if "gemini" in model_candidate:
+                    # Native Gemini multimodal image model via generate_content
+                    response = client.models.generate_content(
+                        model=model_candidate,
+                        contents=req.prompt + ", cinematic 16:9 widescreen movie storyboard frame, highly detailed concept art, film still",
                     )
-                )
-                if response.generated_images:
-                    image_bytes = response.generated_images[0].image.image_bytes
-                    model_used = imagen_model
+                    if response and response.candidates:
+                        candidate = response.candidates[0]
+                        content = getattr(candidate, "content", None)
+                        parts = getattr(content, "parts", None) if content else None
+                        for part in (parts or []):
+                            inline_data = getattr(part, "inline_data", None)
+                            if inline_data and getattr(inline_data, "data", None):
+                                image_bytes = inline_data.data
+                                model_used = model_candidate
+                                mime = getattr(inline_data, "mime_type", "") or ""
+                                ext = "png" if "png" in mime else "jpg"
+                                break
+                else:
+                    # Legacy Imagen model endpoint via generate_images
+                    response = client.models.generate_images(
+                        model=model_candidate,
+                        prompt=req.prompt + ", highly detailed cinematic storyboard sketch, masterpiece",
+                        config=types.GenerateImagesConfig(
+                            number_of_images=1,
+                            output_mime_type="image/jpeg",
+                            aspect_ratio="16:9"
+                        )
+                    )
+                    if response and response.generated_images:
+                        image_bytes = response.generated_images[0].image.image_bytes
+                        model_used = model_candidate
+                        ext = "jpg"
+                
+                if image_bytes:
                     break
             except Exception:
-                logger.warning("Imagen model %s failed, trying next", imagen_model, exc_info=True)
+                logger.warning("Image model %s failed, trying next", model_candidate, exc_info=True)
 
         if not image_bytes:
             log_event(logger, "image_generation_unavailable", level=logging.WARNING,
-                      provider="vertex_imagen", reason="all_models_failed")
+                      provider="vertex_ai_image", reason="all_models_failed")
 
         if not image_bytes:
-            # Never call a third-party generative model: submission rules permit
-            # Google Cloud AI tooling only. Keep the UI usable with a local asset.
             svg = f'''<svg width="800" height="450" xmlns="http://www.w3.org/2000/svg">
                 <rect width="100%" height="100%" fill="#0f172a"/>
-                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#64748b">Vertex Imagen unavailable — no external AI fallback used</text>
+                <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="18" fill="#64748b">Vertex Image Generation unavailable</text>
             </svg>'''
             image_bytes = svg.encode('utf-8')
             filename = f"img_fallback_{uuid.uuid4().hex[:8]}.svg"
             image_provider = "svg_fallback"
         else:
             safe_prompt = "".join([c for c in req.prompt[:20].lower() if c.isalnum()]).replace(' ', '_')
-            filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.jpg"
+            filename = f"img_{safe_prompt}_{uuid.uuid4().hex[:8]}.{ext}"
+            image_provider = "vertex_ai_image"
         
         img_dir = os.path.join(static_dir, "images", "storyboards")
         os.makedirs(img_dir, exist_ok=True)
@@ -536,9 +777,23 @@ async def generate_image(req: GenerateImageRequest):
         with open(filepath, "wb") as f:
             f.write(image_bytes)
             
+        image_url = f"/static/images/storyboards/{filename}"
+
+        # Persist real generated AI images to ClickHouse (fallback SVG is strictly NOT persisted)
+        if image_provider != "svg_fallback":
+            image_id = f"img-{uuid.uuid4().hex[:8]}"
+            ch_manager.insert_generated_image(
+                image_id=image_id,
+                prompt=req.prompt,
+                model=model_used or "gemini-2.5-flash-image",
+                image_url=image_url,
+                project_id=req.project_id,
+                storyboard_id=req.storyboard_id
+            )
+
         log_event(logger, "image_generation_completed", provider=image_provider, model=model_used,
                   latency_ms=round((time.perf_counter() - started) * 1000, 2), image_bytes=len(image_bytes))
-        return JSONResponse({"status": "success", "image_url": f"/static/images/storyboards/{filename}"})
+        return JSONResponse({"status": "success", "image_url": image_url})
     except Exception:
         logger.exception("Image generation failed")
         raise HTTPException(status_code=500, detail="Image generation failed")
