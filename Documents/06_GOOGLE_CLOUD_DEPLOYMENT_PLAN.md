@@ -95,12 +95,17 @@ Allow the Cloud Build service account to push only to this repository. First obt
 gcloud projects describe project-2154682a-9280-4a32-a72 --format="value(projectNumber)"
 ```
 
-Then replace `PROJECT_NUMBER` below:
+Then grant the roles/artifactregistry.writer role to both the standard Cloud Build service account and the default Compute Engine service account (which Cloud Build often uses by default):
 
 ```bash
 gcloud artifacts repositories add-iam-policy-binding cineagent \
   --location=us-central1 \
   --member="serviceAccount:PROJECT_NUMBER@cloudbuild.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer"
+
+gcloud artifacts repositories add-iam-policy-binding cineagent \
+  --location=us-central1 \
+  --member="serviceAccount:PROJECT_NUMBER-compute@developer.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
 ```
 

@@ -2,8 +2,10 @@ document.addEventListener("DOMContentLoaded", () => {
 
     // ── State ──
     let currentProject = null;
+    let currentDocId = "";     // doc_id of the most recently uploaded script
     let tensionChart = null;
     const AGENT_IDS = [
+        'agent-script-analyst',
         'agent-producer', 'agent-writer', 'agent-storyboard',
         'agent-production', 'agent-audio', 'agent-clickhouse'
     ];
@@ -107,14 +109,16 @@ document.addEventListener("DOMContentLoaded", () => {
             const res = await fetch("/api/generate-film-project", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ premise, genre, tone })
+                body: JSON.stringify({ premise, genre, tone, doc_id: currentDocId })
             });
 
             const data = await res.json();
             if (data.status === "success") {
                 completeAgentsCrew();
+                currentProjectId = data.project_id || null;
                 renderFilmProject(data.project);
                 switchToTab("tab-bible");
+                showSaveToast("Project saved ✓");
             } else {
                 resetAgentsCrew();
                 alert("Generation failed. Please try again.");
@@ -281,11 +285,13 @@ document.addEventListener("DOMContentLoaded", () => {
         if (bibleContent) bibleContent.classList.remove("hidden");
 
         // Overview
-        projectTitleEl.textContent = bible.title || "Untitled Project";
+        const groundedBadge = project.grounded
+            ? `<span class="grounded-badge"><i class="fa-solid fa-circle-check"></i> RAG Grounded</span>`
+            : "";
+        projectTitleEl.innerHTML = (bible.title || "Untitled Project") + groundedBadge;
         projectGenreEl.textContent = document.getElementById("genre").value;
         projectAudienceEl.textContent = bible.target_audience || "General Audience";
         projectLoglineEl.textContent = `"${bible.logline || ''}"`;
-
         // Characters
         charactersGrid.innerHTML = "";
         (bible.characters || []).forEach(c => {
@@ -341,22 +347,90 @@ document.addEventListener("DOMContentLoaded", () => {
             screenplayBody.appendChild(block);
         });
 
-        // Storyboards — static cinematic placeholder (no image generation API)
+        // ── Storyboards — Imagen 3 Live Generation ──
         storyboardsGrid.innerHTML = "";
+
+        async function generateStoryboardImage(prompt, previewEl) {
+            previewEl.classList.add("sb-loading");
+            previewEl.innerHTML = `
+                <div class="sb-loading-icon">
+                    <i class="fa-solid fa-wand-magic-sparkles fa-beat-fade"></i>
+                    <span>Generating with Imagen 3…</span>
+                </div>
+            `;
+            try {
+                const res = await fetch("/api/generate-image", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ prompt })
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const data = await res.json();
+                if (data.status !== "success" || !data.image_url) throw new Error("No image_url");
+
+                previewEl.classList.remove("sb-loading", "sb-error");
+                previewEl.innerHTML = `<img class="sb-image" src="${data.image_url}" alt="AI Storyboard Frame" loading="lazy">`;
+                return data.image_url;
+            } catch (err) {
+                console.warn("Imagen generation failed:", err);
+                previewEl.classList.remove("sb-loading");
+                previewEl.classList.add("sb-error");
+                previewEl.innerHTML = `
+                    <div class="sb-error-icon">
+                        <i class="fa-solid fa-triangle-exclamation"></i>
+                        <span>Imagen unavailable</span>
+                    </div>
+                `;
+                return null;
+            }
+        }
+
         storyboards.forEach((sb) => {
             const card = document.createElement("div");
             card.className = "storyboard-card";
+
+            const previewEl = document.createElement("div");
+            previewEl.className = "storyboard-preview";
+
+            const regenOverlay = document.createElement("div");
+            regenOverlay.className = "storyboard-regen-overlay";
+            regenOverlay.innerHTML = `
+                <button class="btn-regen-img">
+                    <i class="fa-solid fa-rotate-right"></i> Regenerate
+                </button>
+            `;
+
+            const shotTag = document.createElement("span");
+            shotTag.className = "shot-tag";
+            shotTag.textContent = sb.shot_type;
+
+            previewEl.appendChild(regenOverlay);
+            previewEl.appendChild(shotTag);
+
             card.innerHTML = `
-                <div class="storyboard-preview storyboard-placeholder">
-                    <i class="fa-solid fa-film storyboard-placeholder-icon"></i>
-                    <span class="shot-tag">${sb.shot_type}</span>
-                </div>
                 <div class="storyboard-details">
                     <h4>${sb.title}</h4>
                     <p class="prompt-text">${sb.image_prompt}</p>
                 </div>
             `;
+            card.prepend(previewEl);
             storyboardsGrid.appendChild(card);
+
+            // Fire image generation immediately (non-blocking)
+            generateStoryboardImage(sb.image_prompt, previewEl);
+
+            // Wire the Regenerate button
+            regenOverlay.querySelector(".btn-regen-img").addEventListener("click", async (e) => {
+                const btn = e.currentTarget;
+                btn.disabled = true;
+                await generateStoryboardImage(sb.image_prompt, previewEl);
+                btn.disabled = false;
+                // Re-attach overlay since innerHTML was replaced
+                if (!previewEl.contains(regenOverlay)) {
+                    previewEl.appendChild(regenOverlay);
+                    previewEl.appendChild(shotTag);
+                }
+            });
         });
 
         // Production Design
@@ -504,4 +578,314 @@ document.addEventListener("DOMContentLoaded", () => {
         }
     });
 
+    // ── Script Upload Panel ──────────────────────────────────────────────────
+
+    const dropZone     = document.getElementById("upload-drop-zone");
+    const fileInput    = document.getElementById("script-file-input");
+    const uploadStatus = document.getElementById("upload-status");
+    const parsedPreview = document.getElementById("parsed-bible-preview");
+
+    function setUploadStatus(state, message) {
+        uploadStatus.className = `upload-status status-${state}`;
+        uploadStatus.classList.remove("hidden");
+        const icons = { parsing: "fa-spinner fa-spin", success: "fa-circle-check", error: "fa-triangle-exclamation" };
+        uploadStatus.innerHTML = `<i class="fa-solid ${icons[state] || ''}"></i> ${message}`;
+    }
+
+    function renderParsedBiblePreview(data) {
+        const pb = data.parsed_bible || {};
+        const themes = (pb.themes || []).map(t => `<span class="theme-tag">${t}</span>`).join("");
+        parsedPreview.classList.remove("hidden");
+        parsedPreview.innerHTML = `
+            <div class="parsed-preview-title">
+                <i class="fa-solid fa-file-lines" style="color:var(--accent-gold);margin-right:6px;font-size:12px;"></i>
+                ${pb.title || "Untitled"}
+            </div>
+            <p class="parsed-preview-logline">${pb.logline || ""}</p>
+            <div class="parsed-preview-meta">
+                <span class="pill">${pb.genre || ""}</span>
+                <span class="pill target-audience">${pb.tone || ""}</span>
+            </div>
+            ${themes ? `<div class="parsed-preview-themes">${themes}</div>` : ""}
+            <div class="parsed-preview-footer">
+                <i class="fa-solid fa-users" style="font-size:10px;"></i>
+                ${pb.character_count || 0} characters · ${data.chunks_indexed || 0} chunks indexed
+                <button class="clear-script-btn" id="clear-script-btn">✕ Remove</button>
+            </div>
+        `;
+
+        // Auto-populate premise from logline if textarea is still default
+        if (pb.logline) {
+            const premiseEl = document.getElementById("premise");
+            if (premiseEl) premiseEl.value = pb.logline;
+        }
+
+        document.getElementById("clear-script-btn")?.addEventListener("click", () => {
+            currentDocId = "";
+            parsedPreview.classList.add("hidden");
+            parsedPreview.innerHTML = "";
+            uploadStatus.classList.add("hidden");
+            dropZone.classList.remove("drag-over");
+            setAgentStatus("agent-script-analyst", "idle");
+        });
+    }
+
+    async function processUploadedFile(file) {
+        if (!file) return;
+        const allowed = ["application/pdf", "text/plain"];
+        if (!allowed.includes(file.type)) {
+            setUploadStatus("error", `Unsupported type: ${file.type}. Use PDF or TXT.`);
+            return;
+        }
+        if (file.size > 20 * 1024 * 1024) {
+            setUploadStatus("error", "File exceeds 20 MB limit.");
+            return;
+        }
+
+        setAgentStatus("agent-script-analyst", "running");
+        setUploadStatus("parsing", `Parsing "${file.name}" with Gemini…`);
+        parsedPreview.classList.add("hidden");
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch("/api/upload-script", {
+                method: "POST",
+                body: formData,
+            });
+            const data = await res.json();
+
+            if (!res.ok || data.status !== "success") {
+                throw new Error(data.detail || "Upload failed");
+            }
+
+            currentDocId = data.doc_id;
+            setAgentStatus("agent-script-analyst", "done");
+            const vertexMsg = data.vertex_search_indexed
+                ? " · Vertex AI Search indexed"
+                : " · ClickHouse indexed";
+            setUploadStatus("success", `✓ "${data.parsed_bible?.title || file.name}" parsed${vertexMsg}`);
+            renderParsedBiblePreview(data);
+
+        } catch (err) {
+            console.error("Upload error:", err);
+            setAgentStatus("agent-script-analyst", "idle");
+            setUploadStatus("error", `Upload failed: ${err.message}`);
+        }
+    }
+
+    // Drag-and-drop events
+    ["dragenter", "dragover"].forEach(evt =>
+        dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.add("drag-over"); })
+    );
+    ["dragleave", "drop"].forEach(evt =>
+        dropZone.addEventListener(evt, (e) => { e.preventDefault(); dropZone.classList.remove("drag-over"); })
+    );
+    dropZone.addEventListener("drop", (e) => {
+        const file = e.dataTransfer?.files?.[0];
+        if (file) processUploadedFile(file);
+    });
+
+    // Click-to-browse
+    dropZone.addEventListener("click", (e) => {
+        if (!e.target.closest("label")) fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+        if (fileInput.files?.[0]) processUploadedFile(fileInput.files[0]);
+        fileInput.value = "";  // reset so same file can be re-selected
+    });
+
 });
+
+// ══════════════════════════════════════════════════════════════════════
+//  Library — Project Persistence Module
+// ══════════════════════════════════════════════════════════════════════
+
+let currentProjectId = null;  // set after each successful generation
+
+// ── Save Toast ──────────────────────────────────────────────────────
+let _toastTimer = null;
+function showSaveToast(msg = 'Project saved ✓') {
+    const toast = document.getElementById('save-toast');
+    const label = document.getElementById('save-toast-msg');
+    if (!toast) return;
+    label.textContent = msg;
+    toast.classList.add('visible');
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => toast.classList.remove('visible'), 3000);
+}
+
+// ── Load Library ────────────────────────────────────────────────────
+async function loadLibrary() {
+    const grid       = document.getElementById('library-grid');
+    const empty      = document.getElementById('library-empty');
+    const subtitle   = document.getElementById('library-subtitle');
+    const refreshBtn = document.getElementById('library-refresh-btn');
+    if (!grid) return;
+
+    refreshBtn?.classList.add('spinning');
+    subtitle.textContent = 'Loading…';
+    grid.innerHTML = '';
+
+    try {
+        const res      = await fetch('/api/projects');
+        const data     = await res.json();
+        const projects = data.projects || [];
+
+        subtitle.textContent = projects.length
+            ? `${projects.length} saved project${projects.length !== 1 ? 's' : ''}`
+            : 'No projects yet';
+
+        if (projects.length === 0) {
+            empty.style.display = 'block';
+        } else {
+            empty.style.display = 'none';
+            projects.forEach(p => grid.appendChild(renderProjectCard(p)));
+        }
+    } catch (err) {
+        subtitle.textContent = 'Failed to load — check connection';
+        console.error('Library load error:', err);
+    } finally {
+        refreshBtn?.classList.remove('spinning');
+    }
+}
+
+// ── Render one project card ─────────────────────────────────────────
+function renderProjectCard(p) {
+    const card = document.createElement('div');
+    card.className = 'project-card';
+    card.dataset.projectId = p.project_id;
+
+    const date = p.created_at
+        ? new Date(p.created_at).toLocaleDateString('en-US',
+            { month: 'short', day: 'numeric', year: 'numeric' })
+        : '';
+
+    const groundedPill = p.grounded
+        ? `<span class="project-card-pill grounded"><i class="fa-solid fa-seedling"></i> RAG</span>`
+        : '';
+
+    card.innerHTML = `
+        <p class="project-card-title" title="${p.title || 'Untitled'}">${p.title || 'Untitled'}</p>
+        <div class="project-card-meta">
+            ${p.genre ? `<span class="project-card-pill">${p.genre}</span>` : ''}
+            ${p.tone  ? `<span class="project-card-pill tone">${p.tone}</span>`  : ''}
+            ${groundedPill}
+        </div>
+        <p class="project-card-premise">${p.premise || ''}</p>
+        <p class="project-card-date"><i class="fa-regular fa-clock"></i> ${date}</p>
+        <div class="project-card-actions">
+            <button class="project-load-btn" data-id="${p.project_id}">
+                <i class="fa-solid fa-play"></i> Load Project
+            </button>
+            <button class="project-delete-btn"
+                    data-id="${p.project_id}"
+                    data-title="${(p.title || 'Untitled').replace(/"/g, '&quot;')}">
+                <i class="fa-solid fa-trash-can"></i>
+            </button>
+        </div>
+    `;
+
+    card.querySelector('.project-load-btn').addEventListener('click',
+        () => loadProject(p.project_id, p));
+    card.querySelector('.project-delete-btn').addEventListener('click',
+        () => confirmDeleteProject(p.project_id, p.title || 'Untitled'));
+
+    return card;
+}
+
+// ── Load a saved project ────────────────────────────────────────────
+async function loadProject(projectId, meta) {
+    const subtitle = document.getElementById('library-subtitle');
+    if (subtitle) subtitle.textContent = 'Loading project…';
+
+    try {
+        const res  = await fetch(`/api/projects/${projectId}`);
+        const data = await res.json();
+        if (data.status !== 'success') throw new Error('Not found');
+
+        renderFilmProject(data.project);
+        currentProjectId = projectId;
+
+        // Pre-fill sidebar so the user can tweak and re-generate
+        const premiseEl = document.getElementById('premise');
+        const genreEl   = document.getElementById('genre');
+        const toneEl    = document.getElementById('tone');
+        if (premiseEl && meta?.premise) premiseEl.value = meta.premise;
+        if (genreEl   && meta?.genre)   genreEl.value   = meta.genre;
+        if (toneEl    && meta?.tone)    toneEl.value    = meta.tone;
+
+        switchToTab('tab-bible');
+        showSaveToast('Project loaded ✓');
+    } catch (err) {
+        alert('Could not load project — it may have been deleted.');
+        console.error('loadProject error:', err);
+    }
+}
+
+// ── Delete confirm modal ────────────────────────────────────────────
+let _pendingDelete = null;
+
+function confirmDeleteProject(projectId, title) {
+    _pendingDelete = projectId;
+    document.getElementById('confirm-modal-title').textContent = `Delete "${title}"?`;
+    document.getElementById('confirm-modal-body').textContent =
+        'All scenes and data will be removed. This cannot be undone.';
+    document.getElementById('confirm-modal-overlay').style.display = 'flex';
+}
+
+function closeModal() {
+    document.getElementById('confirm-modal-overlay').style.display = 'none';
+    _pendingDelete = null;
+}
+
+async function executeDeleteProject() {
+    if (!_pendingDelete) return;
+    const id = _pendingDelete;
+    closeModal();
+
+    try {
+        const res  = await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+        const data = await res.json();
+        if (data.status === 'success') {
+            const card = document.querySelector(`.project-card[data-project-id="${id}"]`);
+            if (card) {
+                card.style.transition = 'opacity 0.25s, transform 0.25s';
+                card.style.opacity    = '0';
+                card.style.transform  = 'scale(0.95)';
+                setTimeout(() => { card.remove(); updateLibraryCount(); }, 260);
+            }
+            showSaveToast('Project deleted');
+        }
+    } catch (err) {
+        alert('Failed to delete project.');
+        console.error('deleteProject error:', err);
+    }
+}
+
+function updateLibraryCount() {
+    const grid     = document.getElementById('library-grid');
+    const empty    = document.getElementById('library-empty');
+    const subtitle = document.getElementById('library-subtitle');
+    if (!grid) return;
+    const count = grid.querySelectorAll('.project-card').length;
+    if (empty)    empty.style.display = count === 0 ? 'block' : 'none';
+    if (subtitle) subtitle.textContent = count === 0
+        ? 'No projects yet'
+        : `${count} saved project${count !== 1 ? 's' : ''}`;
+}
+
+// ── Wire modal buttons ──────────────────────────────────────────────
+document.getElementById('confirm-cancel-btn')
+    ?.addEventListener('click', closeModal);
+document.getElementById('confirm-delete-btn')
+    ?.addEventListener('click', executeDeleteProject);
+document.getElementById('confirm-modal-overlay')
+    ?.addEventListener('click', (e) => { if (e.target === e.currentTarget) closeModal(); });
+
+// ── Wire Library tab refresh ────────────────────────────────────────
+document.getElementById('library-refresh-btn')
+    ?.addEventListener('click', loadLibrary);
+document.getElementById('library-tab-btn')
+    ?.addEventListener('click', loadLibrary);

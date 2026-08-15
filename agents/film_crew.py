@@ -132,18 +132,40 @@ class CineAgentFilmCrew:
             )
             raise
 
-    def run_executive_producer(self, premise: str, genre: str, tone: str) -> Dict[str, Any]:
+    def run_executive_producer(self, premise: str, genre: str, tone: str,
+                                script_context: str = "") -> Dict[str, Any]:
         """
         Director / Executive Producer Agent:
         Develops logline, character roster, central conflict, and act structure.
+
+        Args:
+            premise:        One-line user concept.
+            genre:          Film genre selected by user.
+            tone:           Emotional tone selected by user.
+            script_context: Optional RAG passages retrieved from an uploaded
+                            script via Vertex AI Search. When provided, the
+                            agent grounds its Film Bible in the writer's actual
+                            vision rather than generating from scratch.
         """
+        context_block = ""
+        if script_context:
+            context_block = f"""
+IMPORTANT — REFERENCE MATERIAL FROM UPLOADED SCRIPT:
+The following passages were retrieved from a screenplay or treatment uploaded
+by the user. Use them as the primary source of truth for characters, story
+beats, and themes. Your Film Bible must reflect the writer's actual vision:
+---
+{script_context}
+---
+"""
+
         prompt = f"""
         You are the Lead Executive Producer and Film Director for a blockbuster feature film.
         Given the following concept:
         - Genre: {genre}
         - Tone: {tone}
         - Premise: {premise}
-
+{context_block}
         Generate a complete Film Concept Bible in JSON format containing:
         - "title": Compelling cinematic title (must feel authentic to the genre and tone)
         - "logline": Short, high-concept logline (1-2 sentences)
@@ -169,9 +191,11 @@ class CineAgentFilmCrew:
             # Always carry genre and tone into the bible so downstream agents can use them
             data["genre"] = genre
             data["tone"] = tone
+            data["grounded"] = bool(script_context)
             return data
         except Exception:
             logger.exception("Executive Producer Agent failed; returning fallback")
+
             return {
                 "title": f"The {genre} Chronicles",
                 "logline": premise,

@@ -29,6 +29,9 @@ class ClickHouseManager:
 
         self.mock_scenes: List[Dict[str, Any]] = []
         self.mock_dialogues: List[Dict[str, Any]] = []
+        self.mock_script_documents: List[Dict[str, Any]] = []
+        self.mock_uploaded_scripts: List[Dict[str, Any]] = []
+        self.mock_projects: List[Dict[str, Any]] = []
         self._init_connection()
 
     def _init_connection(self):
@@ -88,7 +91,57 @@ class ClickHouseManager:
             ) ENGINE = MergeTree()
             ORDER BY dialogue_id
             """)
-            log_event(logger, "clickhouse_schema_ready", tables=["scenes", "dialogues"])
+
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS script_documents (
+                doc_id      String,
+                title       String,
+                chunk_index UInt32,
+                chunk_text  String,
+                embedding   Array(Float32),
+                created_at  DateTime DEFAULT now()
+            ) ENGINE = MergeTree()
+            ORDER BY (doc_id, chunk_index)
+            """)
+
+            # ── Uploaded Scripts metadata registry ──
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS uploaded_scripts (
+                doc_id          String,
+                filename        String,
+                mime_type       String,
+                title           String,
+                logline         String,
+                genre           String,
+                tone            String,
+                characters_json String,
+                themes_json     String,
+                chunk_count     UInt32,
+                vertex_indexed  UInt8 DEFAULT 0,
+                created_at      DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY doc_id
+            """)
+
+            # ── Saved film projects ──
+            self.client.command("""
+            CREATE TABLE IF NOT EXISTS projects (
+                project_id   String,
+                title        String,
+                genre        String,
+                tone         String,
+                premise      String,
+                grounded     UInt8 DEFAULT 0,
+                doc_id       String DEFAULT '',
+                project_json String,
+                created_at   DateTime DEFAULT now()
+            ) ENGINE = ReplacingMergeTree(created_at)
+            ORDER BY project_id
+            """)
+
+            log_event(logger, "clickhouse_schema_ready",
+                      tables=["scenes", "dialogues", "script_documents",
+                               "uploaded_scripts", "projects"])
         except Exception:
             logger.exception("ClickHouse schema setup failed")
 
@@ -155,14 +208,19 @@ class ClickHouseManager:
     def vector_search_scenes(self, query_vector: List[float], limit: int = 3) -> List[Dict[str, Any]]:
         """Perform vector similarity search across ClickHouse scenes."""
         started = time.perf_counter()
+        dim = len(query_vector)
         if not self.use_mock and self.client:
             try:
-                query_str = f"""
-                SELECT scene_id, title, heading, description, tension_score, pacing_tag
-                FROM scenes
-                LIMIT {limit}
-                """
-                result = self.client.query(query_str)
+                result = self.client.query(
+                    f"""
+                    SELECT scene_id, title, heading, description, tension_score, pacing_tag,
+                           cosineDistance(embedding, {query_vector!r}) AS dist
+                    FROM scenes
+                    WHERE length(embedding) = {dim}
+                    ORDER BY dist ASC
+                    LIMIT {limit}
+                    """
+                )
                 scenes = []
                 for row in result.result_rows:
                     scenes.append({
@@ -172,7 +230,7 @@ class ClickHouseManager:
                         "description": row[3],
                         "tension_score": row[4],
                         "pacing_tag": row[5],
-                        "similarity_score": 0.94
+                        "similarity_score": round(max(0.0, 1.0 - float(row[6])), 4),
                     })
                 log_event(logger, "clickhouse_vector_search_completed", engine="live", limit=limit,
                           result_count=len(scenes), latency_ms=round((time.perf_counter() - started) * 1000, 2))
@@ -250,6 +308,360 @@ class ClickHouseManager:
         log_event(logger, "clickhouse_analytics_completed", engine="embedded",
                   latency_ms=round((time.perf_counter() - started) * 1000, 2), total_scenes=total_scenes)
         return payload
+
+    # ──────────────────────────────────────────────
+    # Script Document Store (RAG chunks)
+    # ──────────────────────────────────────────────
+
+    def insert_script_document(self, doc_id: str, title: str, chunk_index: int,
+                                chunk_text: str, embedding: List[float]) -> None:
+        """Store a script text chunk with its real text-embedding-004 vector."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                self.client.command(
+                    "INSERT INTO script_documents "
+                    "(doc_id, title, chunk_index, chunk_text, embedding) VALUES",
+                    [[doc_id, title, chunk_index, chunk_text, embedding]]
+                )
+                log_event(logger, "script_document_inserted", doc_id=doc_id,
+                          chunk_index=chunk_index, vector_dim=len(embedding),
+                          engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return
+            except Exception:
+                logger.exception("ClickHouse script_document insert failed; using embedded engine")
+
+        # Embedded fallback
+        self.mock_script_documents.append({
+            "doc_id": doc_id,
+            "title": title,
+            "chunk_index": chunk_index,
+            "chunk_text": chunk_text,
+            "embedding": embedding,
+        })
+        log_event(logger, "script_document_inserted", doc_id=doc_id,
+                  chunk_index=chunk_index, vector_dim=len(embedding),
+                  engine="embedded",
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+
+    def search_script_documents(self, query_embedding: List[float],
+                                 top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Return top-k script chunks most similar to query_embedding.
+        Uses cosine similarity via ClickHouse or in-memory fallback.
+        """
+        started = time.perf_counter()
+        dim = len(query_embedding)
+
+        if not self.use_mock and self.client:
+            try:
+                # ClickHouse cosine similarity: using L2Distance as proxy
+                # (full cosineDistance is available in newer CH versions)
+                result = self.client.query(
+                    f"""
+                    SELECT doc_id, title, chunk_index, chunk_text,
+                           cosineDistance(embedding, {query_embedding!r}) AS dist
+                    FROM script_documents
+                    WHERE length(embedding) = {dim}
+                    ORDER BY dist ASC
+                    LIMIT {top_k}
+                    """
+                )
+                rows = [
+                    {
+                        "doc_id": r[0], "title": r[1],
+                        "chunk_index": r[2], "chunk_text": r[3],
+                        "similarity": round(1.0 - float(r[4]), 4),
+                    }
+                    for r in result.result_rows
+                ]
+                log_event(logger, "script_document_search_completed", engine="live",
+                          result_count=len(rows),
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return rows
+            except Exception:
+                logger.exception("ClickHouse script doc search failed; using embedded engine")
+
+        # Embedded cosine similarity
+        def cosine_sim(v1: List[float], v2: List[float]) -> float:
+            if len(v1) != len(v2):
+                return 0.0
+            dot = sum(a * b for a, b in zip(v1, v2))
+            n1 = math.sqrt(sum(a * a for a in v1)) + 1e-9
+            n2 = math.sqrt(sum(b * b for b in v2)) + 1e-9
+            return dot / (n1 * n2)
+
+        scored = [
+            {**doc, "similarity": round(cosine_sim(query_embedding, doc["embedding"]), 4)}
+            for doc in self.mock_script_documents
+            if len(doc.get("embedding", [])) == dim
+        ]
+        scored.sort(key=lambda x: x["similarity"], reverse=True)
+        results = scored[:top_k]
+        log_event(logger, "script_document_search_completed", engine="embedded",
+                  result_count=len(results),
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return results
+
+    # ──────────────────────────────────────────────────────────────
+    # Uploaded Scripts Registry
+    # ──────────────────────────────────────────────────────────────
+
+    def save_uploaded_script(self, doc_id: str, filename: str, mime_type: str,
+                              title: str, logline: str, genre: str, tone: str,
+                              characters: List[Dict], themes: List[str],
+                              chunk_count: int, vertex_indexed: bool) -> None:
+        """Persist uploaded script metadata. Upserts on doc_id (ReplacingMergeTree)."""
+        started = time.perf_counter()
+        row = {
+            "doc_id": doc_id, "filename": filename, "mime_type": mime_type,
+            "title": title, "logline": logline, "genre": genre, "tone": tone,
+            "characters_json": json.dumps(characters),
+            "themes_json": json.dumps(themes),
+            "chunk_count": chunk_count,
+            "vertex_indexed": 1 if vertex_indexed else 0,
+        }
+        if not self.use_mock and self.client:
+            try:
+                self.client.command(
+                    "INSERT INTO uploaded_scripts "
+                    "(doc_id, filename, mime_type, title, logline, genre, tone, "
+                    "characters_json, themes_json, chunk_count, vertex_indexed) VALUES",
+                    [[
+                        row["doc_id"], row["filename"], row["mime_type"],
+                        row["title"], row["logline"], row["genre"], row["tone"],
+                        row["characters_json"], row["themes_json"],
+                        row["chunk_count"], row["vertex_indexed"],
+                    ]]
+                )
+                log_event(logger, "uploaded_script_saved", doc_id=doc_id, engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return
+            except Exception:
+                logger.exception("ClickHouse save_uploaded_script failed; using embedded engine")
+
+        # Embedded: replace if exists, otherwise append
+        self.mock_uploaded_scripts = [s for s in self.mock_uploaded_scripts if s["doc_id"] != doc_id]
+        self.mock_uploaded_scripts.append(row)
+        log_event(logger, "uploaded_script_saved", doc_id=doc_id, engine="embedded",
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+
+    def list_uploaded_scripts(self) -> List[Dict[str, Any]]:
+        """Return all uploaded script metadata records, newest first."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                result = self.client.query("""
+                    SELECT doc_id, filename, mime_type, title, logline, genre, tone,
+                           characters_json, themes_json, chunk_count, vertex_indexed, created_at
+                    FROM uploaded_scripts FINAL
+                    ORDER BY created_at DESC
+                """)
+                rows = []
+                for r in result.result_rows:
+                    rows.append({
+                        "doc_id": r[0], "filename": r[1], "mime_type": r[2],
+                        "title": r[3], "logline": r[4], "genre": r[5], "tone": r[6],
+                        "characters": json.loads(r[7] or "[]"),
+                        "themes": json.loads(r[8] or "[]"),
+                        "chunk_count": r[9], "vertex_indexed": bool(r[10]),
+                        "created_at": str(r[11]),
+                    })
+                log_event(logger, "uploaded_scripts_listed", count=len(rows), engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return rows
+            except Exception:
+                logger.exception("ClickHouse list_uploaded_scripts failed; using embedded engine")
+
+        rows = []
+        for s in reversed(self.mock_uploaded_scripts):
+            rows.append({
+                **s,
+                "characters": json.loads(s.get("characters_json", "[]")),
+                "themes": json.loads(s.get("themes_json", "[]")),
+            })
+        log_event(logger, "uploaded_scripts_listed", count=len(rows), engine="embedded",
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return rows
+
+    def get_uploaded_script(self, doc_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a single uploaded script's metadata by doc_id. Returns None if not found."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                result = self.client.query(
+                    "SELECT doc_id, filename, mime_type, title, logline, genre, tone, "
+                    "characters_json, themes_json, chunk_count, vertex_indexed, created_at "
+                    "FROM uploaded_scripts FINAL "
+                    "WHERE doc_id = %(doc_id)s LIMIT 1",
+                    parameters={"doc_id": doc_id}
+                )
+                if result.result_rows:
+                    r = result.result_rows[0]
+                    return {
+                        "doc_id": r[0], "filename": r[1], "mime_type": r[2],
+                        "title": r[3], "logline": r[4], "genre": r[5], "tone": r[6],
+                        "characters": json.loads(r[7] or "[]"),
+                        "themes": json.loads(r[8] or "[]"),
+                        "chunk_count": r[9], "vertex_indexed": bool(r[10]),
+                        "created_at": str(r[11]),
+                    }
+                return None
+            except Exception:
+                logger.exception("ClickHouse get_uploaded_script failed; using embedded engine")
+
+        match = next((s for s in self.mock_uploaded_scripts if s["doc_id"] == doc_id), None)
+        if match:
+            return {**match,
+                    "characters": json.loads(match.get("characters_json", "[]")),
+                    "themes": json.loads(match.get("themes_json", "[]"))}
+        return None
+
+    def delete_uploaded_script(self, doc_id: str) -> bool:
+        """
+        Delete an uploaded script record AND all its chunks from script_documents.
+        Returns True if the row existed and was deleted, False if not found.
+        """
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                self.client.command(
+                    "ALTER TABLE uploaded_scripts DELETE WHERE doc_id = %(doc_id)s",
+                    parameters={"doc_id": doc_id}
+                )
+                self.client.command(
+                    "ALTER TABLE script_documents DELETE WHERE doc_id = %(doc_id)s",
+                    parameters={"doc_id": doc_id}
+                )
+                log_event(logger, "uploaded_script_deleted", doc_id=doc_id, engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return True
+            except Exception:
+                logger.exception("ClickHouse delete_uploaded_script failed; using embedded engine")
+
+        before = len(self.mock_uploaded_scripts)
+        self.mock_uploaded_scripts = [s for s in self.mock_uploaded_scripts if s["doc_id"] != doc_id]
+        self.mock_script_documents = [d for d in self.mock_script_documents if d["doc_id"] != doc_id]
+        deleted = len(self.mock_uploaded_scripts) < before
+        log_event(logger, "uploaded_script_deleted", doc_id=doc_id, engine="embedded",
+                  found=deleted, latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return deleted
+
+    # ──────────────────────────────────────────────────────────────
+    # Saved Film Projects
+    # ──────────────────────────────────────────────────────────────
+
+    def save_project(self, project_id: str, title: str, genre: str, tone: str,
+                     premise: str, grounded: bool, doc_id: str,
+                     project_json: str) -> None:
+        """Persist a full film project. Upserts on project_id (ReplacingMergeTree)."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                self.client.command(
+                    "INSERT INTO projects "
+                    "(project_id, title, genre, tone, premise, grounded, doc_id, project_json) VALUES",
+                    [[project_id, title, genre, tone, premise,
+                      1 if grounded else 0, doc_id or "", project_json]]
+                )
+                log_event(logger, "project_saved", project_id=project_id, engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return
+            except Exception:
+                logger.exception("ClickHouse save_project failed; using embedded engine")
+
+        self.mock_projects = [p for p in self.mock_projects if p["project_id"] != project_id]
+        self.mock_projects.append({
+            "project_id": project_id, "title": title, "genre": genre,
+            "tone": tone, "premise": premise,
+            "grounded": 1 if grounded else 0, "doc_id": doc_id or "",
+            "project_json": project_json,
+        })
+        log_event(logger, "project_saved", project_id=project_id, engine="embedded",
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+
+    def list_projects(self) -> List[Dict[str, Any]]:
+        """Return lightweight project metadata (no project_json), newest first."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                result = self.client.query("""
+                    SELECT project_id, title, genre, tone, premise, grounded, doc_id, created_at
+                    FROM projects FINAL
+                    ORDER BY created_at DESC
+                """)
+                rows = [
+                    {
+                        "project_id": r[0], "title": r[1], "genre": r[2],
+                        "tone": r[3], "premise": r[4],
+                        "grounded": bool(r[5]), "doc_id": r[6],
+                        "created_at": str(r[7]),
+                    }
+                    for r in result.result_rows
+                ]
+                log_event(logger, "projects_listed", count=len(rows), engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return rows
+            except Exception:
+                logger.exception("ClickHouse list_projects failed; using embedded engine")
+
+        rows = [
+            {k: v for k, v in p.items() if k != "project_json"}
+            for p in reversed(self.mock_projects)
+        ]
+        log_event(logger, "projects_listed", count=len(rows), engine="embedded",
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return rows
+
+    def load_project(self, project_id: str) -> Optional[Dict[str, Any]]:
+        """Load the full project JSON for a single project. Returns None if not found."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                result = self.client.query(
+                    "SELECT project_json FROM projects FINAL "
+                    "WHERE project_id = %(pid)s LIMIT 1",
+                    parameters={"pid": project_id}
+                )
+                if result.result_rows:
+                    data = json.loads(result.result_rows[0][0])
+                    log_event(logger, "project_loaded", project_id=project_id, engine="live",
+                              latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                    return data
+                return None
+            except Exception:
+                logger.exception("ClickHouse load_project failed; using embedded engine")
+
+        match = next((p for p in self.mock_projects if p["project_id"] == project_id), None)
+        if match:
+            log_event(logger, "project_loaded", project_id=project_id, engine="embedded",
+                      latency_ms=round((time.perf_counter() - started) * 1000, 2))
+            return json.loads(match["project_json"])
+        return None
+
+    def delete_project(self, project_id: str) -> bool:
+        """Delete a project by ID. Returns True if it existed."""
+        started = time.perf_counter()
+        if not self.use_mock and self.client:
+            try:
+                self.client.command(
+                    "ALTER TABLE projects DELETE WHERE project_id = %(pid)s",
+                    parameters={"pid": project_id}
+                )
+                log_event(logger, "project_deleted", project_id=project_id, engine="live",
+                          latency_ms=round((time.perf_counter() - started) * 1000, 2))
+                return True
+            except Exception:
+                logger.exception("ClickHouse delete_project failed; using embedded engine")
+
+        before = len(self.mock_projects)
+        self.mock_projects = [p for p in self.mock_projects if p["project_id"] != project_id]
+        deleted = len(self.mock_projects) < before
+        log_event(logger, "project_deleted", project_id=project_id, engine="embedded",
+                  found=deleted, latency_ms=round((time.perf_counter() - started) * 1000, 2))
+        return deleted
+
 
 # Global Instance Singleton
 ch_manager = ClickHouseManager()

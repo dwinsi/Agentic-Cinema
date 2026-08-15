@@ -2,10 +2,11 @@ import os
 import logging
 import time
 from typing import Dict, Any, List, Optional
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel
+import json
 
 import uuid
 
@@ -13,6 +14,7 @@ from observability import configure_logging, content_metadata, get_logger, log_e
 configure_logging()
 
 from agents.film_crew import film_crew
+from agents.script_processor import script_processor
 from database.clickhouse_client import ch_manager
 
 logger = get_logger("CineAgent.App")
@@ -59,6 +61,7 @@ class FilmConceptRequest(BaseModel):
     premise: str
     genre: str = "Sci-Fi Thriller"
     tone: str = "Cinematic & High Tension"
+    doc_id: str = ""  # Optional: uploaded script document ID for RAG grounding
 
 class ReviseSceneRequest(BaseModel):
     film_bible: dict
@@ -98,10 +101,21 @@ async def generate_film_project(req: FilmConceptRequest):
     """
     try:
         log_event(logger, "film_project_requested", genre=req.genre, tone=req.tone,
-                  **content_metadata(req.premise, "premise"))
-        
-        # Step 1: Run Executive Producer Agent
-        film_bible = film_crew.run_executive_producer(req.premise, req.genre, req.tone)
+                  doc_id=req.doc_id or None, **content_metadata(req.premise, "premise"))
+
+        # Step 0 (optional): Retrieve grounding passages from Vertex AI Search
+        script_context = ""
+        if req.doc_id:
+            passages = script_processor.retrieve_from_vertex_search(req.premise, top_k=3)
+            if passages:
+                script_context = "\n\n".join(passages)
+                log_event(logger, "rag_grounding_applied", doc_id=req.doc_id,
+                          passage_count=len(passages))
+
+        # Step 1: Run Executive Producer Agent (with optional script grounding)
+        film_bible = film_crew.run_executive_producer(
+            req.premise, req.genre, req.tone, script_context=script_context
+        )
 
         # Step 2: Run Screenwriter Agent
         scenes = film_crew.run_screenwriter(film_bible)
@@ -118,38 +132,260 @@ async def generate_film_project(req: FilmConceptRequest):
         # Step 6: Run Market Analyst Agent
         analytics = film_crew.run_market_analyst(film_bible, scenes)
 
-        # Step 7: Index Scenes into ClickHouse Vector Database
+        # Step 7: Index Scenes into ClickHouse with real text-embedding-004 vectors
         for idx, scene in enumerate(scenes):
-            # Generate deterministic synthetic vector embedding for ClickHouse vector index demonstration
-            vector = [0.1 * (idx + 1), 0.25, 0.45, 0.85, 0.35, 0.90, 0.15, 0.70]
+            scene_id = scene.get("scene_id") or f"sc-{idx+1}"
+            title    = scene.get("title") or f"Scene {idx+1}"
+            heading  = scene.get("heading") or "INT. SET - DAY"
+            desc     = scene.get("description") or title  # fall back to title, never None
+            pacing   = scene.get("pacing_tag") or "BUILD"
+            tension  = float(scene.get("tension_score") or 5.0)
+
+            vector = script_processor.embed_text(desc)
             ch_manager.insert_scene(
-                scene_id=scene.get("scene_id", f"sc-{idx+1}"),
-                title=scene.get("title", f"Scene {idx+1}"),
-                heading=scene.get("heading", "INT. SET - DAY"),
-                description=scene.get("description", ""),
-                tension=float(scene.get("tension_score", 5.0)),
-                pacing=scene.get("pacing_tag", "BUILD"),
+                scene_id=scene_id,
+                title=title,
+                heading=heading,
+                description=desc,
+                tension=tension,
+                pacing=pacing,
                 vector=vector
             )
 
-        log_event(logger, "film_project_completed", scene_count=len(scenes))
+
+        log_event(logger, "film_project_completed", scene_count=len(scenes),
+                  grounded=bool(script_context))
+
+        project_id = uuid.uuid4().hex
+        project_payload = {
+            "film_bible": film_bible,
+            "scenes": scenes,
+            "storyboards": storyboards,
+            "production_design": production_design,
+            "audio_post": audio_post,
+            "analytics": analytics,
+            "clickhouse_indexed_scenes": len(scenes),
+            "grounded": bool(script_context),
+        }
+
+        # Auto-save to projects table
+        ch_manager.save_project(
+            project_id=project_id,
+            title=film_bible.get("title") or "Untitled",
+            genre=req.genre,
+            tone=req.tone,
+            premise=req.premise,
+            grounded=bool(script_context),
+            doc_id=req.doc_id or "",
+            project_json=json.dumps(project_payload),
+        )
+
         return JSONResponse({
             "status": "success",
-            "project": {
-                "film_bible": film_bible,
-                "scenes": scenes,
-                "storyboards": storyboards,
-                "production_design": production_design,
-                "audio_post": audio_post,
-                "analytics": analytics,
-                "clickhouse_indexed_scenes": len(scenes)
-            }
+            "project_id": project_id,
+            "project": project_payload,
         })
     except Exception:
         logger.exception("Film project generation failed")
         raise HTTPException(status_code=500, detail="Film project generation failed")
 
+
+@app.post("/api/upload-script")
+async def upload_script(file: UploadFile = File(...)):
+    """
+    Upload a screenplay or treatment (PDF or TXT).
+
+    Pipeline:
+      1. Validate MIME type
+      2. Parse with Gemini multimodal API → extract structured Film Bible
+      3. Chunk raw text → embed each chunk with text-embedding-004
+      4. Store chunks in ClickHouse script_documents table
+      5. Index full document in Vertex AI Search data store
+
+    Returns the parsed Film Bible preview and the doc_id to be passed
+    back to /api/generate-film-project for RAG-grounded generation.
+    """
+    ALLOWED_MIME = {"application/pdf", "text/plain"}
+    MAX_SIZE_BYTES = 20 * 1024 * 1024  # 20 MB
+
+    content_type = file.content_type or "application/octet-stream"
+    if content_type not in ALLOWED_MIME:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type: {content_type}. Upload PDF or plain-text files."
+        )
+
+    try:
+        file_bytes = await file.read()
+        if len(file_bytes) > MAX_SIZE_BYTES:
+            raise HTTPException(status_code=413, detail="File exceeds 20 MB limit.")
+
+        started = time.perf_counter()
+        log_event(logger, "script_upload_started", filename=file.filename,
+                  mime_type=content_type, file_bytes=len(file_bytes))
+
+        # 1. Parse with Gemini
+        parsed = script_processor.parse_script(file_bytes, content_type, file.filename or "script")
+        doc_id = parsed["doc_id"]
+        raw_text = parsed.get("raw_text_excerpt", "")
+
+        # 2. Chunk & embed → ClickHouse
+        chunks = script_processor.chunk_script(raw_text) if raw_text else []
+        chunks_indexed = 0
+        for i, chunk in enumerate(chunks):
+            embedding = script_processor.embed_text(chunk)
+            ch_manager.insert_script_document(
+                doc_id=doc_id,
+                title=parsed.get("title", file.filename or "Untitled"),
+                chunk_index=i,
+                chunk_text=chunk,
+                embedding=embedding,
+            )
+            chunks_indexed += 1
+
+        # 3. Index in Vertex AI Search (best-effort, non-blocking)
+        full_content = raw_text or parsed.get("logline", "")
+        vertex_indexed = script_processor.index_in_vertex_search(
+            doc_id=doc_id,
+            title=parsed.get("title", file.filename or "Untitled"),
+            content=full_content,
+        )
+
+        # 3. Persist metadata to uploaded_scripts table
+        ch_manager.save_uploaded_script(
+            doc_id=doc_id,
+            filename=file.filename or "script",
+            mime_type=content_type,
+            title=parsed.get("title") or file.filename or "Untitled",
+            logline=parsed.get("logline") or "",
+            genre=parsed.get("genre") or "Drama",
+            tone=parsed.get("tone") or "Cinematic & Epic",
+            characters=parsed.get("characters") or [],
+            themes=parsed.get("themes") or [],
+            chunk_count=chunks_indexed,
+            vertex_indexed=vertex_indexed,
+        )
+
+        log_event(logger, "script_upload_completed", doc_id=doc_id,
+                  title=parsed.get("title"), chunks_indexed=chunks_indexed,
+                  vertex_indexed=vertex_indexed,
+                  latency_ms=round((time.perf_counter() - started) * 1000, 2))
+
+        return JSONResponse({
+            "status": "success",
+            "doc_id": doc_id,
+            "parsed_bible": {
+                "title": parsed.get("title"),
+                "logline": parsed.get("logline"),
+                "genre": parsed.get("genre"),
+                "tone": parsed.get("tone"),
+                "character_count": len(parsed.get("characters", [])),
+                "characters": parsed.get("characters", []),
+                "themes": parsed.get("themes", []),
+            },
+            "chunks_indexed": chunks_indexed,
+            "vertex_search_indexed": vertex_indexed,
+        })
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Script upload failed")
+        raise HTTPException(status_code=500, detail="Script upload and parsing failed")
+
+
+# ── Uploaded Scripts Management ──────────────────────────────────────────────
+
+@app.get("/api/scripts")
+async def list_scripts():
+    """List all uploaded screenplay/treatment metadata records."""
+    try:
+        scripts = ch_manager.list_uploaded_scripts()
+        return JSONResponse({"status": "success", "scripts": scripts, "count": len(scripts)})
+    except Exception:
+        logger.exception("list_scripts failed")
+        raise HTTPException(status_code=500, detail="Failed to list uploaded scripts")
+
+
+@app.get("/api/scripts/{doc_id}")
+async def get_script(doc_id: str):
+    """Fetch metadata for a single uploaded script by doc_id."""
+    try:
+        script = ch_manager.get_uploaded_script(doc_id)
+        if script is None:
+            raise HTTPException(status_code=404, detail=f"Script '{doc_id}' not found")
+        return JSONResponse({"status": "success", "script": script})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("get_script failed")
+        raise HTTPException(status_code=500, detail="Failed to fetch script")
+
+
+@app.delete("/api/scripts/{doc_id}")
+async def delete_script(doc_id: str):
+    """
+    Delete an uploaded script and all its embedded chunks.
+    Also removes the doc_id from any projects that reference it (soft — projects remain).
+    """
+    try:
+        deleted = ch_manager.delete_uploaded_script(doc_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Script '{doc_id}' not found")
+        log_event(logger, "script_deleted_via_api", doc_id=doc_id)
+        return JSONResponse({"status": "success", "deleted_doc_id": doc_id})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("delete_script failed")
+        raise HTTPException(status_code=500, detail="Failed to delete script")
+
+
+# ── Saved Projects Management ─────────────────────────────────────────────────
+
+@app.get("/api/projects")
+async def list_projects():
+    """List all saved film projects (metadata only, no full JSON)."""
+    try:
+        projects = ch_manager.list_projects()
+        return JSONResponse({"status": "success", "projects": projects, "count": len(projects)})
+    except Exception:
+        logger.exception("list_projects failed")
+        raise HTTPException(status_code=500, detail="Failed to list projects")
+
+
+@app.get("/api/projects/{project_id}")
+async def load_project(project_id: str):
+    """Load a complete saved project by ID."""
+    try:
+        project = ch_manager.load_project(project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        return JSONResponse({"status": "success", "project": project})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("load_project failed")
+        raise HTTPException(status_code=500, detail="Failed to load project")
+
+
+@app.delete("/api/projects/{project_id}")
+async def delete_project(project_id: str):
+    """Permanently delete a saved project."""
+    try:
+        deleted = ch_manager.delete_project(project_id)
+        if not deleted:
+            raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found")
+        log_event(logger, "project_deleted_via_api", project_id=project_id)
+        return JSONResponse({"status": "success", "deleted_project_id": project_id})
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("delete_project failed")
+        raise HTTPException(status_code=500, detail="Failed to delete project")
+
+
 @app.post("/api/revise-scene")
+
 async def revise_scene_endpoint(req: ReviseSceneRequest):
     """
     Interactive Storytelling: Rewrites a specific scene and regenerates its assets.
@@ -250,29 +486,34 @@ async def generate_image(req: GenerateImageRequest):
         
         image_bytes = None
         image_provider = "vertex_imagen"
+        model_used = None
         started = time.perf_counter()
-        log_event(logger, "image_generation_started", model="imagen-3.0-generate-001",
+        log_event(logger, "image_generation_started", models_tried=["imagen-3.0-generate-002", "imagen-3.0-generate-001"],
                   **content_metadata(req.prompt, "image_prompt"))
-        
-        try:
-            # Attempt GCP Imagen 3 via Vertex AI
-            client = get_gemini_client()
-            response = client.models.generate_images(
-                model='imagen-3.0-generate-001',
-                prompt=req.prompt + ", highly detailed cinematic storyboard sketch, masterpiece",
-                config=types.GenerateImagesConfig(
-                    number_of_images=1,
-                    output_mime_type="image/jpeg",
-                    aspect_ratio="16:9"
+
+        # Try Imagen model versions in preference order — whichever is quota-enabled on this project
+        for imagen_model in ["imagen-3.0-generate-002", "imagen-3.0-generate-001"]:
+            try:
+                client = get_gemini_client()
+                response = client.models.generate_images(
+                    model=imagen_model,
+                    prompt=req.prompt + ", highly detailed cinematic storyboard sketch, masterpiece",
+                    config=types.GenerateImagesConfig(
+                        number_of_images=1,
+                        output_mime_type="image/jpeg",
+                        aspect_ratio="16:9"
+                    )
                 )
-            )
-            
-            if response.generated_images:
-                image_bytes = response.generated_images[0].image.image_bytes
-        except Exception:
-            logger.warning("Vertex Imagen failed; returning placeholder", exc_info=True)
+                if response.generated_images:
+                    image_bytes = response.generated_images[0].image.image_bytes
+                    model_used = imagen_model
+                    break
+            except Exception:
+                logger.warning("Imagen model %s failed, trying next", imagen_model, exc_info=True)
+
+        if not image_bytes:
             log_event(logger, "image_generation_unavailable", level=logging.WARNING,
-                      provider="vertex_imagen", reason="provider_error")
+                      provider="vertex_imagen", reason="all_models_failed")
 
         if not image_bytes:
             # Never call a third-party generative model: submission rules permit
@@ -295,7 +536,7 @@ async def generate_image(req: GenerateImageRequest):
         with open(filepath, "wb") as f:
             f.write(image_bytes)
             
-        log_event(logger, "image_generation_completed", provider=image_provider,
+        log_event(logger, "image_generation_completed", provider=image_provider, model=model_used,
                   latency_ms=round((time.perf_counter() - started) * 1000, 2), image_bytes=len(image_bytes))
         return JSONResponse({"status": "success", "image_url": f"/static/images/storyboards/{filename}"})
     except Exception:
@@ -304,23 +545,24 @@ async def generate_image(req: GenerateImageRequest):
 
 @app.post("/api/vector-search")
 async def vector_search(req: VectorSearchRequest):
-    """Performs semantic vector search across ClickHouse script embeddings."""
+    """Performs semantic vector search across ClickHouse scene embeddings."""
     try:
         log_event(logger, "vector_search_requested", limit=req.limit,
                   **content_metadata(req.query, "search_query"))
-        # Synthesize query vector based on query length/content
-        query_vector = [0.80, 0.15, 0.40, 0.88, 0.30, 0.75, 0.20, 0.85]
+        # Embed the search query with the same model used when indexing scenes
+        query_vector = script_processor.embed_text(req.query)
         results = ch_manager.vector_search_scenes(query_vector, req.limit)
         log_event(logger, "vector_search_completed", limit=req.limit, result_count=len(results))
         return JSONResponse({
             "status": "success",
             "query": req.query,
-            "vector_dimension": 8,
+            "vector_dimension": len(query_vector),
             "results": results
         })
     except Exception:
         logger.exception("Vector search failed")
         raise HTTPException(status_code=500, detail="Vector search failed")
+
 
 @app.get("/api/analytics")
 async def get_analytics():
