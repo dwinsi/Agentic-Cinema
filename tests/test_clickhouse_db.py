@@ -18,7 +18,7 @@ def test_clickhouse_tables_exist():
     assert isinstance(tables, list)
     expected_tables = ["scenes", "dialogues", "storyboards", "production_design", "audio_post"]
     for t in expected_tables:
-        assert any(t in str(table_name) for table_name in tables) or ch_manager.use_mock
+        assert any(t in table_name for table_name in tables) or ch_manager.use_mock
 
 
 def test_save_and_retrieve_project(sample_film_bible, sample_scenes):
@@ -46,4 +46,4 @@ def test_save_and_retrieve_project(sample_film_bible, sample_scenes):
     
     retrieved = ch_manager.load_project(project_id)
     assert retrieved is not None
-    assert retrieved.get("film_bible", {}).get("title") == sample_film_bible["title"]
+    assert retrieved.get("title") == sample_film_bible["title"]
