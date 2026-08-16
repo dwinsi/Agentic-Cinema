@@ -21,5 +21,7 @@ Welcome to the official documentation hub for **CineAgent Studio**! This directo
 
 - **Application & Streaming Controller**: [app.py](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/app.py)
 - **Multi-Agent AI Film Crew**: [agents/film_crew.py](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/agents/film_crew.py)
+- **Official ClickHouse MCP Client**: [database/mcp_client.py](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/database/mcp_client.py)
 - **ClickHouse Vector & Asset Vault**: [database/clickhouse_client.py](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/database/clickhouse_client.py)
 - **Direct GCP Logging & Telemetry**: [observability.py](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/observability.py)
+- **Automated Test Suite (pytest)**: [tests/](file:///Users/ashwinsingh/Downloads/Agentic-Cinema/tests/)

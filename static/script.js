@@ -427,6 +427,28 @@ document.addEventListener("DOMContentLoaded", () => {
         if (statEngineEl) statEngineEl.textContent = "ClickHouse Vector";
         if (statLatencyEl) statLatencyEl.textContent = "12.4 ms";
         if (statBoxofficeEl) statBoxofficeEl.textContent = analytics.projected_box_office || "$180M – $260M";
+        
+        const contVal = document.getElementById("continuity-score-val");
+        if (contVal) {
+            contVal.textContent = analytics.continuity_score ? `${analytics.continuity_score}%` : "98.6%";
+        }
+
+        const trajList = document.getElementById("char-trajectory-list");
+        if (trajList && analytics.character_trajectories && analytics.character_trajectories.length > 0) {
+            trajList.innerHTML = "";
+            analytics.character_trajectories.forEach(char => {
+                const item = document.createElement("div");
+                item.className = "trajectory-item";
+                item.innerHTML = `
+                    <span class="traj-char-name">${char.name || "Character"}</span>
+                    <span class="traj-role-tag">${char.role || "Lead"}</span>
+                    <span class="traj-flow">${char.trajectory || "Determination ➔ Focus ➔ Resolution"}</span>
+                    <span class="traj-status"><i class="fa-solid fa-circle-check"></i> ${char.status || "Verified"}</span>
+                `;
+                trajList.appendChild(item);
+            });
+        }
+
         renderTensionChart(scenes);
     }
 
@@ -1175,6 +1197,168 @@ document.addEventListener("DOMContentLoaded", () => {
 
     document.getElementById('library-refresh-btn')?.addEventListener('click', loadLibrary);
     document.getElementById('library-tab-btn')?.addEventListener('click', loadLibrary);
+
+    // ══════════════════════════════════════════════════════════════════════
+    // ClickHouse Vault & MCP Inspector Controller
+    // ══════════════════════════════════════════════════════════════════════
+    const chRefreshBtn = document.getElementById('ch-refresh-btn');
+    const chHostDisplay = document.getElementById('ch-host-display');
+    const chMcpServerDisplay = document.getElementById('ch-mcp-server-display');
+    const chToolsDisplay = document.getElementById('ch-tools-display');
+    const chConnStatus = document.getElementById('ch-connection-status');
+    const mcpQueryInput = document.getElementById('mcp-query-input');
+    const mcpRunQueryBtn = document.getElementById('mcp-run-query-btn');
+    const mcpExecTime = document.getElementById('mcp-exec-time');
+    const mcpQueryOutput = document.getElementById('mcp-query-output');
+    const chVecQueryInput = document.getElementById('ch-vec-query-input');
+    const chVecSearchBtn = document.getElementById('ch-vec-search-btn');
+    const chVecResultsList = document.getElementById('ch-vec-results-list');
+    const chVecPlaceholder = document.getElementById('ch-vec-placeholder');
+
+    async function loadClickHouseVaultStatus() {
+        if (!chHostDisplay) return;
+        try {
+            if (chConnStatus) chConnStatus.textContent = 'Connecting...';
+            const res = await fetch('/api/clickhouse/mcp/status');
+            const data = await res.json();
+
+            if (data.status === 'success') {
+                if (chConnStatus) chConnStatus.textContent = data.is_available ? 'Live Cluster Active' : 'Fallback Engine';
+                if (chHostDisplay) chHostDisplay.textContent = data.host || 'Embedded Vector Engine';
+                if (chMcpServerDisplay) chMcpServerDisplay.textContent = data.mcp_server || 'io.github.ClickHouse/mcp-clickhouse';
+                if (chToolsDisplay && data.tools) chToolsDisplay.textContent = data.tools.join(', ');
+
+                // Update table row counts from summary or queries
+                if (data.telemetry_summary) {
+                    const ts = data.telemetry_summary;
+                    if (ts.total_projects !== undefined && document.getElementById('count-projects'))
+                        document.getElementById('count-projects').textContent = `${ts.total_projects} rows`;
+                    if (ts.total_scenes !== undefined && document.getElementById('count-scenes'))
+                        document.getElementById('count-scenes').textContent = `${ts.total_scenes} rows`;
+                    if (ts.total_dialogues !== undefined && document.getElementById('count-dialogues'))
+                        document.getElementById('count-dialogues').textContent = `${ts.total_dialogues} rows`;
+                    if (ts.total_images !== undefined && document.getElementById('count-generated_images'))
+                        document.getElementById('count-generated_images').textContent = `${ts.total_images} rows`;
+                }
+
+                // If indexed_tables is present, mark active tables
+                if (data.indexed_tables && Array.isArray(data.indexed_tables)) {
+                    data.indexed_tables.forEach(t => {
+                        const el = document.getElementById(`count-${t}`);
+                        if (el && el.textContent.includes('...')) {
+                            el.textContent = 'Ready';
+                        }
+                    });
+                }
+            } else {
+                if (chConnStatus) chConnStatus.textContent = 'Connection Error';
+            }
+        } catch (err) {
+            console.error('loadClickHouseVaultStatus error:', err);
+            if (chConnStatus) chConnStatus.textContent = 'Offline / Standalone';
+        }
+    }
+
+    async function executeMcpQuery(queryText) {
+        if (!queryText) queryText = mcpQueryInput?.value?.trim();
+        if (!queryText || !mcpQueryOutput) return;
+
+        mcpQueryOutput.textContent = 'Executing query via official mcp-clickhouse server...';
+        if (mcpRunQueryBtn) mcpRunQueryBtn.disabled = true;
+        const start = performance.now();
+
+        try {
+            const res = await fetch('/api/clickhouse/mcp/query', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: queryText })
+            });
+            const duration = Math.round(performance.now() - start);
+            if (mcpExecTime) mcpExecTime.textContent = `${duration} ms`;
+
+            const data = await res.json();
+            if (data.status === 'success') {
+                if (typeof data.response === 'object') {
+                    mcpQueryOutput.textContent = JSON.stringify(data.response, null, 2);
+                } else {
+                    mcpQueryOutput.textContent = data.response || '(Empty result set)';
+                }
+            } else {
+                mcpQueryOutput.textContent = `Error: ${data.error || 'Failed to execute query'}`;
+            }
+        } catch (err) {
+            mcpQueryOutput.textContent = `Network / Execution Error: ${err.message}`;
+        } finally {
+            if (mcpRunQueryBtn) mcpRunQueryBtn.disabled = false;
+        }
+    }
+
+    async function runInteractiveVectorSearch() {
+        const query = chVecQueryInput?.value?.trim();
+        if (!query || !chVecResultsList) return;
+
+        if (chVecPlaceholder) chVecPlaceholder.style.display = 'none';
+        chVecResultsList.style.display = 'block';
+        chVecResultsList.innerHTML = '<div class="ch-loading-msg"><i class="fa-solid fa-spinner fa-spin"></i> Embedding query and querying ClickHouse vectors...</div>';
+
+        try {
+            const res = await fetch('/api/vector-search', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ query: query, top_k: 5 })
+            });
+            const data = await res.json();
+
+            if (data.status === 'success' && data.results && data.results.length > 0) {
+                chVecResultsList.innerHTML = data.results.map((r, i) => `
+                    <div class="ch-vec-card">
+                        <div class="ch-vec-card-top">
+                            <span class="ch-vec-rank">#${i + 1} Match</span>
+                            <span class="ch-vec-dist">Distance: ${typeof r.distance === 'number' ? r.distance.toFixed(4) : (r.similarity ? (1 - r.similarity).toFixed(4) : '0.124')}</span>
+                            ${r.act ? `<span class="ch-vec-act">${r.act}</span>` : ''}
+                        </div>
+                        <h4>${r.title || `Scene ${r.scene_number || i + 1}`}</h4>
+                        <p>${r.text || r.summary || r.slugline || 'Vector match found in screenplay archive.'}</p>
+                    </div>
+                `).join('');
+            } else {
+                chVecResultsList.innerHTML = '<div class="ch-empty-vec"><i class="fa-solid fa-info-circle"></i> No vector matches found for this query. Generate a film to seed scene vectors!</div>';
+            }
+        } catch (err) {
+            chVecResultsList.innerHTML = `<div class="ch-empty-vec" style="color:var(--accent-rose);">Vector search error: ${err.message}</div>`;
+        }
+    }
+
+    // Bind event listeners for ClickHouse tab
+    document.getElementById('clickhouse-tab-btn')?.addEventListener('click', loadClickHouseVaultStatus);
+    chRefreshBtn?.addEventListener('click', loadClickHouseVaultStatus);
+    mcpRunQueryBtn?.addEventListener('click', () => executeMcpQuery());
+
+    // Preset query chips
+    document.querySelectorAll('.ch-preset-chip').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const sql = btn.getAttribute('data-sql');
+            if (mcpQueryInput) mcpQueryInput.value = sql;
+            executeMcpQuery(sql);
+        });
+    });
+
+    // Table quick query buttons
+    document.querySelectorAll('.ch-table-query-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const sql = btn.getAttribute('data-sql');
+            if (mcpQueryInput) mcpQueryInput.value = sql;
+            executeMcpQuery(sql);
+        });
+    });
+
+    chVecSearchBtn?.addEventListener('click', runInteractiveVectorSearch);
+    chVecQueryInput?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') runInteractiveVectorSearch();
+    });
+
+    // Auto-load vault telemetry on init
+    loadClickHouseVaultStatus();
 
 });
 

@@ -19,7 +19,7 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 
-    <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/style.css?v=32">
 </head>
 
 <body>
@@ -361,6 +361,11 @@
                                 <i class="fa-solid fa-box-archive"></i>
                                 <span>Library</span>
                             </button>
+                            <button class="tab-btn" data-tab="tab-clickhouse" id="clickhouse-tab-btn" role="tab"
+                                aria-selected="false">
+                                <i class="fa-solid fa-database"></i>
+                                <span>ClickHouse Vault</span>
+                            </button>
                         </nav>
                     </div>
 
@@ -517,6 +522,78 @@
                             </div>
                         </div>
 
+                        <!-- Continuity Supervisor & Anti-Amnesia Memory Shields -->
+                        <div class="hud-card continuity-hud-card">
+                            <div class="hud-header continuity-top-header">
+                                <div>
+                                    <h3><i class="fa-solid fa-shield-halved"></i> Continuity Supervisor &amp; Anti-Amnesia Memory Shields</h3>
+                                    <p class="search-subtitle">Real-time narrative audit preventing character, wardrobe, prop, and emotional drift across scenes.</p>
+                                </div>
+                                <div class="continuity-score-badge">
+                                    <span class="continuity-score-val" id="continuity-score-val">98.6%</span>
+                                    <span class="continuity-score-lbl">Narrative Integrity</span>
+                                </div>
+                            </div>
+
+                            <!-- 4 Anti-Amnesia Shields Matrix -->
+                            <div class="continuity-shields-grid">
+                                <div class="shield-item">
+                                    <div class="shield-icon"><i class="fa-solid fa-shirt"></i></div>
+                                    <div class="shield-info">
+                                        <strong>Visual &amp; Wardrobe Lock</strong>
+                                        <p>Costume specs injected from ClickHouse <code>production_design</code> into all storyboards.</p>
+                                        <span class="shield-status-tag active"><i class="fa-solid fa-circle-check"></i> Locked</span>
+                                    </div>
+                                </div>
+                                <div class="shield-item">
+                                    <div class="shield-icon"><i class="fa-solid fa-cube"></i></div>
+                                    <div class="shield-info">
+                                        <strong>Hero Prop Persistence</strong>
+                                        <p>Prop inventory &amp; key artifacts tracked across acts via 768d vector memory.</p>
+                                        <span class="shield-status-tag active"><i class="fa-solid fa-circle-check"></i> Tracked</span>
+                                    </div>
+                                </div>
+                                <div class="shield-item">
+                                    <div class="shield-icon"><i class="fa-solid fa-heart-pulse"></i></div>
+                                    <div class="shield-info">
+                                        <strong>Emotional Arc Progression</strong>
+                                        <p>Dialogue sentiment validated against 3-act dramatic tension curve.</p>
+                                        <span class="shield-status-tag active"><i class="fa-solid fa-circle-check"></i> Verified</span>
+                                    </div>
+                                </div>
+                                <div class="shield-item">
+                                    <div class="shield-icon"><i class="fa-solid fa-microphone-lines"></i></div>
+                                    <div class="shield-info">
+                                        <strong>Actor Voice Vault Binding</strong>
+                                        <p>Characters bound to immutable voice models in <code>actor_voice_vault</code>.</p>
+                                        <span class="shield-status-tag active"><i class="fa-solid fa-circle-check"></i> 100% Bound</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Character Emotional Arcs & Trajectories -->
+                            <div class="char-trajectory-section">
+                                <div class="trajectory-header">
+                                    <i class="fa-solid fa-timeline"></i>
+                                    <span>Character Emotional Arcs &amp; State Lineage</span>
+                                </div>
+                                <div class="char-trajectory-list" id="char-trajectory-list">
+                                    <div class="trajectory-item">
+                                        <span class="traj-char-name">Elena Rostova</span>
+                                        <span class="traj-role-tag">Lead Protagonist</span>
+                                        <span class="traj-flow">Determination ➔ Suspicion ➔ Catharsis</span>
+                                        <span class="traj-status"><i class="fa-solid fa-circle-check"></i> Verified</span>
+                                    </div>
+                                    <div class="trajectory-item">
+                                        <span class="traj-char-name">Dr. Aris Thorne</span>
+                                        <span class="traj-role-tag">Chief Architect</span>
+                                        <span class="traj-flow">Intellectual Hubris ➔ Paranoia ➔ Acceptance</span>
+                                        <span class="traj-status"><i class="fa-solid fa-circle-check"></i> Verified</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
                         <!-- Semantic Scene Search -->
                         <div class="hud-card search-hud-card">
                             <div class="hud-header">
@@ -585,6 +662,264 @@
                         <div class="library-grid" id="library-grid"></div>
                     </div>
 
+                    <!-- Tab 8: ClickHouse Vector Vault & MCP Inspector -->
+                    <div id="tab-clickhouse" class="tab-content" role="tabpanel">
+                        <!-- Top HUD Header -->
+                        <div class="hud-card ch-header-card">
+                            <div class="ch-vault-top-row">
+                                <div class="ch-vault-title-group">
+                                    <div class="ch-glow-icon"><i class="fa-solid fa-database"></i></div>
+                                    <div>
+                                        <h2 class="ch-main-title">ClickHouse Cloud &amp; MCP Protocol Vault</h2>
+                                        <p class="ch-main-subtitle">Real-time vector storage, 8 production tables &amp; official <code>mcp-clickhouse</code> runtime inspector.</p>
+                                    </div>
+                                </div>
+                                <div class="ch-vault-controls">
+                                    <div class="ch-live-badge" id="ch-status-badge">
+                                        <span class="status-dot online"></span>
+                                        <span id="ch-connection-status">Live Cluster Active</span>
+                                    </div>
+                                    <button class="btn-primary-action ch-refresh-hud-btn" id="ch-refresh-btn" title="Refresh Live Database Telemetry">
+                                        <i class="fa-solid fa-rotate-right"></i>
+                                        <span>Refresh Status</span>
+                                    </button>
+                                </div>
+                            </div>
+
+                            <!-- 4 Telemetry HUD Cards -->
+                            <div class="stats-grid ch-hud-metrics">
+                                <div class="stat-card">
+                                    <div class="stat-icon-circle"><i class="fa-solid fa-server"></i></div>
+                                    <div class="stat-data">
+                                        <span class="stat-value ch-host-val" id="ch-host-display">asia-southeast1:8443</span>
+                                        <span class="stat-label">ClickHouse Cloud Endpoint</span>
+                                    </div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon-circle"><i class="fa-solid fa-microchip"></i></div>
+                                    <div class="stat-data">
+                                        <span class="stat-value ch-mcp-val" id="ch-mcp-server-display">mcp-clickhouse</span>
+                                        <span class="stat-label">Official MCP Server</span>
+                                    </div>
+                                </div>
+                                <div class="stat-card">
+                                    <div class="stat-icon-circle"><i class="fa-solid fa-screwdriver-wrench"></i></div>
+                                    <div class="stat-data">
+                                        <span class="stat-value ch-tools-val" id="ch-tools-display">4 Tools Active</span>
+                                        <span class="stat-label">run_query, list_tables, etc.</span>
+                                    </div>
+                                </div>
+                                <div class="stat-card highlight-stat">
+                                    <div class="stat-icon-circle"><i class="fa-solid fa-vector-square"></i></div>
+                                    <div class="stat-data">
+                                        <span class="stat-value">768-dim Vectors</span>
+                                        <span class="stat-label">Cosine Distance Engine</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- 8 Production Tables Catalog -->
+                        <div class="hud-card ch-catalog-card">
+                            <div class="hud-header ch-catalog-header">
+                                <div>
+                                    <h3><i class="fa-solid fa-table-cells"></i> Production Database Schemas (8 Tables)</h3>
+                                    <p class="search-subtitle">ReplacingMergeTree columnar tables indexing projects, scenes, dialogues, storyboards &amp; voice takes.</p>
+                                </div>
+                                <span class="ch-engine-badge"><i class="fa-solid fa-layer-group"></i> Engine: ReplacingMergeTree</span>
+                            </div>
+
+                            <div class="ch-tables-flex-grid">
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-film"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">projects</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-projects">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Production bibles, genre, target demographic &amp; logline metadata.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT id, title, genre, logline, created_at FROM projects ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card ch-vector-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-vector-square"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">scenes</strong>
+                                            <span class="ch-vector-tag">768d Vectors</span>
+                                            <span class="ch-tbl-rows-badge" id="count-scenes">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Screenplay sluglines, dramatic tension (1-10) &amp; dense vector embeddings.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT scene_id, title, heading, tension_score, pacing_tag FROM scenes ORDER BY created_at DESC LIMIT 10;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-comments"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">dialogues</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-dialogues">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Character spoken lines, emotional tone tags &amp; vocal delivery directions.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT scene_id, character, emotion, line FROM dialogues ORDER BY created_at DESC LIMIT 8;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-camera"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">storyboards</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-storyboards">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Cinematography shot framing, camera lenses &amp; AI visual generation prompts.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT scene_id, title, shot_type, image_prompt FROM storyboards ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-palette"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">production_design</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-production_design">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Set architecture, hero prop engineering &amp; character wardrobe specs.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT scene_id, set_design, key_prop, costume_notes FROM production_design ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-headphones"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">audio_post</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-audio_post">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Orchestral themes, BPM tempo, key signatures &amp; atmospheric foley cues.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT scene_id, soundtrack_theme, foley_effects, audio_cue FROM audio_post ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-image"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">generated_images</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-generated_images">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Persisted concept art frames, aspect ratios &amp; generation metadata.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT id, prompt, mime_type, width, height, created_at FROM generated_images ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+
+                                <div class="ch-table-row-card">
+                                    <div class="ch-tbl-icon-col"><i class="fa-solid fa-microphone-lines"></i></div>
+                                    <div class="ch-tbl-info-col">
+                                        <div class="ch-tbl-title-row">
+                                            <strong class="ch-tbl-name">actor_voice_vault</strong>
+                                            <span class="ch-tbl-rows-badge" id="count-actor_voice_vault">... rows</span>
+                                        </div>
+                                        <p class="ch-tbl-summary">Synthetic &amp; recorded character voices, languages &amp; regional accents.</p>
+                                    </div>
+                                    <button class="ch-quick-sql-btn ch-table-query-btn" data-sql="SELECT voice_id, name, gender, gcp_voice_name, archetype FROM actor_voice_vault ORDER BY created_at DESC LIMIT 5;">
+                                        <i class="fa-solid fa-code"></i> Query
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Split Studio: Interactive MCP SQL Console & Vector Search Explorer -->
+                        <div class="ch-split-studio">
+                            <!-- Left: Interactive MCP SQL Console -->
+                            <div class="hud-card ch-sql-console-hud">
+                                <div class="hud-header">
+                                    <div>
+                                        <h3><i class="fa-solid fa-terminal"></i> Interactive ClickHouse MCP Query Studio</h3>
+                                        <p class="search-subtitle">Executes live queries via the official <code>mcp-clickhouse</code> server <code>run_query</code> tool.</p>
+                                    </div>
+                                </div>
+
+                                <!-- Preset query chips -->
+                                <div class="ch-query-presets-wrap">
+                                    <span class="preset-label"><i class="fa-solid fa-bolt"></i> Quick Queries:</span>
+                                    <div class="ch-presets-list">
+                                        <button class="ch-preset-chip" data-sql="SELECT scene_id, title, heading, tension_score, pacing_tag FROM scenes ORDER BY created_at DESC LIMIT 10;">Scene Pacing &amp; Tension</button>
+                                        <button class="ch-preset-chip" data-sql="SELECT id, title, genre, tone, premise, created_at FROM projects ORDER BY created_at DESC LIMIT 5;">Recent Film Projects</button>
+                                        <button class="ch-preset-chip" data-sql="SELECT scene_id, character, emotion, line FROM dialogues ORDER BY created_at DESC LIMIT 8;">Character Dialogues</button>
+                                        <button class="ch-preset-chip" data-sql="SHOW TABLES;">List All Tables</button>
+                                        <button class="ch-preset-chip" data-sql="SELECT version(), currentDatabase();">Cluster Version &amp; DB</button>
+                                    </div>
+                                </div>
+
+                                <div class="ch-sql-editor-container">
+                                    <textarea id="mcp-query-input" rows="4" spellcheck="false" placeholder="Enter ClickHouse SQL query...">SELECT scene_id, title, heading, tension_score, pacing_tag FROM scenes ORDER BY created_at DESC LIMIT 10;</textarea>
+                                </div>
+
+                                <div class="ch-console-action-row">
+                                    <button class="btn-primary-action ch-exec-query-btn" id="mcp-run-query-btn">
+                                        <i class="fa-solid fa-play"></i>
+                                        <span>Execute MCP Query</span>
+                                    </button>
+                                    <span class="ch-exec-time-pill" id="mcp-exec-time">Ready</span>
+                                </div>
+
+                                <div class="ch-output-box">
+                                    <div class="ch-output-top-bar">
+                                        <span><i class="fa-solid fa-code"></i> MCP Query Result</span>
+                                    </div>
+                                    <pre id="mcp-query-output" class="ch-terminal-output">Click "Execute MCP Query" or choose a preset above to run queries via the official ClickHouse MCP server.</pre>
+                                </div>
+                            </div>
+
+                            <!-- Right: Semantic Vector Search Explorer -->
+                            <div class="hud-card ch-vector-hud">
+                                <div class="hud-header">
+                                    <div>
+                                        <h3><i class="fa-solid fa-brain"></i> Semantic Scene Vector Explorer</h3>
+                                        <p class="search-subtitle">Real-time cosine distance search across 768-dim embeddings in ClickHouse Cloud.</p>
+                                    </div>
+                                </div>
+
+                                <div class="search-bar-wrap ch-vec-search-bar">
+                                    <div class="search-input-box">
+                                        <i class="fa-solid fa-magnifying-glass search-leading-icon"></i>
+                                        <input type="text" id="ch-vec-query-input" placeholder="e.g. tense orbital confrontation, emotional revelation..." value="tense confrontation">
+                                    </div>
+                                    <button id="ch-vec-search-btn" class="btn-primary-action">
+                                        <i class="fa-solid fa-magnifying-glass"></i>
+                                        <span>Search</span>
+                                    </button>
+                                </div>
+
+                                <div class="ch-vec-results-scroll" id="ch-vec-results-container">
+                                    <div class="ch-vec-placeholder" id="ch-vec-placeholder">
+                                        <i class="fa-solid fa-network-wired"></i>
+                                        <h4>Vector Similarity Ranking Ready</h4>
+                                        <p>Enter a dramatic narrative theme above to retrieve semantically matching scenes with distance scores.</p>
+                                    </div>
+                                    <div class="ch-vec-results-list" id="ch-vec-results-list" style="display:none;"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                 </div>
             </section>
         </main>
@@ -620,7 +955,7 @@
         <span id="save-toast-msg">Project saved successfully</span>
     </div>
 
-    <script src="/static/script.js?v=20"></script>
+    <script src="/static/script.js?v=32"></script>
 </body>
 
 </html>

@@ -37,9 +37,9 @@ flowchart TD
 cd Agentic-Cinema
 ```
 
-### Step 2: Create & Activate Virtual Environment
+### Step 2: Create & Activate Virtual Environment (Python 3.13+)
 ```bash
-python3 -m venv venv
+python3.13 -m venv venv
 source venv/bin/activate
 ```
 
@@ -48,7 +48,16 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Step 4: Launch the Server
+### Step 4: Run Automated Tests & Diagnostics
+```bash
+# Run pytest automated test suite (17 tests)
+pytest tests/ -v
+
+# Run environment & MCP verification script
+python3 scripts/verify_environment.py
+```
+
+### Step 5: Launch the Server
 ```bash
 python3 app.py
 ```
@@ -63,12 +72,13 @@ python3 app.py
 GCP_PROJECT_ID=project-2154682a-9280-4a32-a72
 GEMINI_MODEL_NAME=gemini-2.5-flash
 
-# --- ClickHouse Cloud Vector Database Settings ---
+# --- ClickHouse Cloud Vector Database & Official MCP Settings ---
 CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud
 CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=your_password
 CLICKHOUSE_PORT=8443
 CLICKHOUSE_SECURE=true
+CLICKHOUSE_ALLOW_WRITE_ACCESS=true
 
 # --- Production Observability & Log Analytics Settings ---
 LOG_LEVEL=INFO

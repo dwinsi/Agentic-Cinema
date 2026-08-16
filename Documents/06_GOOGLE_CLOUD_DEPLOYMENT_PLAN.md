@@ -176,13 +176,13 @@ gcloud iam service-accounts add-iam-policy-binding "cineagent-cicd@${PROJECT_ID}
   --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/github-pool/attribute.repository/dwinsi/Agentic-Cinema"
 ```
 
-Now, every `git push origin main` securely mints a short-lived OIDC token directly with Google Cloud and performs an automatic build & deployment.
+Now, every `git push` or `pull_request` triggers the automated `pytest` test suite (17 tests) on Python 3.13. Deployments only proceed to Cloud Run if all unit, integration, and MCP tests pass.
 
 ---
 
 ### Option B: Google Cloud Build Triggers (Native GCP)
 
-A Cloud Build configuration is pre-configured at `cloudbuild.yaml`.
+A Cloud Build configuration is pre-configured at `cloudbuild.yaml` with automated `pytest` execution on `python:3.13-slim` prior to container compilation.
 
 To connect your GitHub repository directly to Cloud Build:
 

@@ -1,4 +1,15 @@
 steps:
+  # 0. Run automated test suite with pytest
+  - name: 'python:3.13-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --no-cache-dir -r requirements.txt
+        pytest tests/ -v
+    env:
+      - 'CLICKHOUSE_ALLOW_WRITE_ACCESS=true'
+
   # 1. Build the container image with commit SHA and latest tags
   - name: 'gcr.io/cloud-builders/docker'
     args:
