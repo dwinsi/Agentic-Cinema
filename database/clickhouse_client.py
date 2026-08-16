@@ -6,6 +6,7 @@ import time
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import clickhouse_connect
+from database.mcp_client import clickhouse_mcp_client, ClickHouseMCPClient
 from observability import get_logger, log_event
 
 # Load environment variables from .env if present
@@ -16,7 +17,8 @@ logger = get_logger("CineAgent.ClickHouse")
 class ClickHouseManager:
     """
     Manages ClickHouse vector storage, scene indexing, and script telemetry.
-    Supports real ClickHouse Cloud / local instances as well as embedded fallback.
+    Supports real ClickHouse Cloud / local instances, official ClickHouse MCP server (`mcp-clickhouse`),
+    as well as embedded fallback.
     """
     def __init__(self):
         self.host = os.getenv("CLICKHOUSE_HOST", None)
@@ -25,6 +27,7 @@ class ClickHouseManager:
         self.port = int(os.getenv("CLICKHOUSE_PORT", "8443"))
         self.secure = os.getenv("CLICKHOUSE_SECURE", "true").lower() == "true"
         self.client = None
+        self.mcp: ClickHouseMCPClient = clickhouse_mcp_client
         self.use_mock = False
 
         self.mock_scenes: List[Dict[str, Any]] = []

@@ -76,9 +76,9 @@ flowchart TD
 - **Responsibilities**: Evaluates commercial viability and narrative pacing.
 - **Outputs**: Estimated budget range, worldwide box office forecast, script health score, dialogue-to-action ratio, and greenlight recommendation.
 
-### 7. ClickHouse Cloud Asset Vault & Vector Engine
-- **Responsibilities**: High-speed indexing, semantic similarity searching, and persistent project storage across 8 tables.
-- **Outputs**: 768-dimensional vector embeddings array storage, cosine similarity search results, and script tension curve telemetry.
+### 7. ClickHouse Cloud Asset Vault & Official MCP Server
+- **Responsibilities**: High-speed indexing, semantic similarity searching, and persistent project storage across 8 tables via `clickhouse-connect` and the official **ClickHouse MCP Server (`mcp-clickhouse`)**.
+- **Outputs**: 768-dimensional vector embeddings array storage, cosine similarity search results, dynamic tool calling for Gemini agents (`run_query`, `list_tables`), and script tension curve telemetry.
 
 ---
 
@@ -86,6 +86,8 @@ flowchart TD
 
 - **Progressive Real-Time Streaming (SSE)**: Streams film bibles within ~3 seconds and yields downstream department results as each completes.
 - **Parallel Department Execution**: Cuts total generation latency by >50% by running Storyboards, Production Design, Audio, and Analytics concurrently.
+- **Official ClickHouse MCP Integration (`mcp-clickhouse`)**: Enables runtime tool-calling for Gemini agents to query database schema, execute vector searches, and gather live cluster telemetry.
 - **Complete ClickHouse Cloud Persistence**: Automatically indexes all 8 production tables so projects and audio takes are never lost.
 - **Actor Voice Vault**: Browse, audition, and synthesize character voices across global accents with automatic voice registration.
 - **Enterprise-Grade AI & Observability**: Powered by `@google/genai` on Vertex AI with dual-dispatch Google Cloud Logging and BigQuery Log Analytics.
+- **Modern Python 3.13 Runtime & 17-Test Suite**: Comprehensive automated testing with `pytest` covering agents, MCP tools, ClickHouse persistence, and REST endpoints.

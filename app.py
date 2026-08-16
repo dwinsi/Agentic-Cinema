@@ -832,6 +832,56 @@ async def get_analytics():
         logger.exception("Analytics endpoint failed")
         raise HTTPException(status_code=500, detail="Analytics endpoint failed")
 
+
+@app.get("/api/clickhouse/mcp/status")
+async def get_clickhouse_mcp_status():
+    """Returns runtime status and tool schema of the official ClickHouse MCP server (`mcp-clickhouse`)."""
+    try:
+        tables = ch_manager.mcp.list_tables()
+        databases = ch_manager.mcp.list_databases()
+        summary = ch_manager.mcp.get_film_telemetry_summary()
+        return JSONResponse({
+            "status": "success",
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse",
+            "is_available": ch_manager.mcp.is_available,
+            "host": ch_manager.mcp.host,
+            "database": ch_manager.mcp.database,
+            "tools": ["run_query", "list_tables", "list_databases", "vector_search_scenes"],
+            "indexed_tables": tables,
+            "databases": databases,
+            "telemetry_summary": summary
+        })
+    except Exception as e:
+        logger.exception("MCP status endpoint failed")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e),
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse"
+        }, status_code=500)
+
+
+class MCPQueryRequest(BaseModel):
+    query: str
+
+
+@app.post("/api/clickhouse/mcp/query")
+async def execute_clickhouse_mcp_query(payload: MCPQueryRequest):
+    """Executes a SQL query via the official ClickHouse MCP server `run_query` tool."""
+    try:
+        res = ch_manager.mcp.run_query(payload.query)
+        return JSONResponse({
+            "status": "success",
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse",
+            "response": res
+        })
+    except Exception as e:
+        logger.exception(f"MCP query endpoint failed: {e}")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e)
+        }, status_code=500)
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("app:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,0 +1,54 @@
+steps:
+  # 0. Run automated test suite with pytest
+  - name: 'python:3.13-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install --no-cache-dir -r requirements.txt
+        pytest tests/ -v
+    env:
+      - 'CLICKHOUSE_ALLOW_WRITE_ACCESS=true'
+
+  # 1. Build the container image with commit SHA and latest tags
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api:$COMMIT_SHA'
+      - '-t'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api:latest'
+      - '.'
+
+  # 2. Push container image to Google Artifact Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api'
+
+  # 3. Deploy container image to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'cineagent-api'
+      - '--image'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api:$COMMIT_SHA'
+      - '--region'
+      - 'us-central1'
+      - '--service-account'
+      - 'cineagent-runtime@$PROJECT_ID.iam.gserviceaccount.com'
+      - '--allow-unauthenticated'
+      - '--set-env-vars'
+      - 'GCP_PROJECT_ID=$PROJECT_ID,CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true'
+      - '--set-secrets'
+      - 'CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:latest'
+
+images:
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api:$COMMIT_SHA'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/cineagent-api:latest'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
