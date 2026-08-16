@@ -1,0 +1,13 @@
+{
+  "name": "agentic-cinema",
+  "version": "1.0.0",
+  "description": "Autonomous Multi-Agent AI Film Studio powered by Gemini 2.5, Google Cloud, and ClickHouse MCP",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "pytest tests/ -v",
+    "start": "python3 app.py"
+  }
+}

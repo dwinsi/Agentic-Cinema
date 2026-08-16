@@ -14,6 +14,8 @@ env:
   REGION: us-central1
   SERVICE_NAME: cineagent-api
   IMAGE_NAME: us-central1-docker.pkg.dev/project-2154682a-9280-4a32-a72/cloud-run-source-deploy/cineagent-api
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 
 jobs:
   test:
@@ -30,10 +32,16 @@ jobs:
           python-version: '3.13'
           cache: 'pip'
 
+      - name: Set up Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
       - name: Install Dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
 
       - name: Run Pytest Test Suite
         env:
