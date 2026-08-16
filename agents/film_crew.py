@@ -192,9 +192,9 @@ beats, and themes. Your Film Bible must reflect the writer's actual vision:
             - "costume_design": Visual outfit description that matches the genre ({genre}) and tone ({tone})
             - "gender": "MALE" or "FEMALE"
             - "voice_id": A valid Google Cloud TTS Voice Name (e.g. "en-US-Journey-F", "en-US-Journey-D", "en-GB-Neural2-A", "en-GB-Neural2-B", "en-US-Neural2-F")
-        - "act_outline": Array of 3 acts ("act_number", "title", "summary") following the {tone} tone
+        - "act_outline": Array of 3 to 6 narrative acts dynamically tailored to the depth of the premise (e.g. 3 acts for concise concepts, 4 to 6 acts for complex or epic storylines). Each act has ("act_number", "title", "summary") following the {tone} tone.
         
-        IMPORTANT: Characters must be original and specific to the given premise. Do NOT use generic placeholder names. Include every character who has meaningful story impact — do not artificially limit to 3.
+        IMPORTANT: Characters must be original and specific to the given premise. Do NOT use generic placeholder names. Include every character who has meaningful story impact — do not artificially limit characters or acts. Structure the narrative with as many acts (3 to 6) as the story truly demands.
         Respond strictly with a valid JSON object. Do not include markdown code block formatting.
         """
 
@@ -224,7 +224,8 @@ beats, and themes. Your Film Bible must reflect the writer's actual vision:
                 "act_outline": [
                     {"act_number": 1, "title": "The Inciting Incident", "summary": f"The world is established in a {tone.lower()} light before everything changes."},
                     {"act_number": 2, "title": "Rising Conflict", "summary": f"Allies and enemies emerge as the stakes escalate across a {genre.lower()} landscape."},
-                    {"act_number": 3, "title": "Resolution", "summary": f"A climactic confrontation resolves the central conflict of the premise."}
+                    {"act_number": 3, "title": "Midpoint Escalation", "summary": f"A critical revelation alters the course of the protagonist's mission."},
+                    {"act_number": 4, "title": "Resolution", "summary": f"A climactic confrontation resolves the central conflict of the premise."}
                 ]
             }
 
@@ -232,7 +233,7 @@ beats, and themes. Your Film Bible must reflect the writer's actual vision:
         """
         Screenwriter Agent:
         Writes screenplay scenes derived from the film bible.
-        Scene count, tone, and characters all come from the LLM — no hardcoded limits.
+        Scene count, tone, and characters all come from the LLM — dynamically matching the act outline.
         """
         title = film_bible.get("title", "Untitled")
         logline = film_bible.get("logline", "")
@@ -251,8 +252,8 @@ beats, and themes. Your Film Bible must reflect the writer's actual vision:
         Act Outline: {act_outline}
         Characters: {characters}
 
-        Write one key scene for EACH ACT in the act outline (so if there are 3 acts, write 3 scenes; 4 acts = 4 scenes).
-        Each scene should be the most dramatically significant moment of its act.
+        Write one key cinematic scene for EACH ACT in the act outline (e.g. 3 acts = 3 scenes; 4 acts = 4 scenes; 5 acts = 5 scenes; 6 acts = 6 scenes).
+        Each scene should be the most dramatically significant moment of its corresponding act. Do not skip any act.
 
         The tone "{tone}" MUST shape:
         - Scene locations and atmosphere (dark & gritty = raw, industrial settings; lighthearted = warm, inviting spaces)
