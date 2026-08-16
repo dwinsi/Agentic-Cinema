@@ -7,6 +7,7 @@ on:
 
 env:
   PROJECT_ID: project-2154682a-9280-4a32-a72
+  PROJECT_NUM: '357002186662'
   REGION: us-central1
   SERVICE_NAME: cineagent-api
   IMAGE_NAME: us-central1-docker.pkg.dev/project-2154682a-9280-4a32-a72/cloud-run-source-deploy/cineagent-api
@@ -16,14 +17,19 @@ jobs:
     name: Build & Deploy
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: read
+      id-token: write
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Authenticate to Google Cloud
+      - name: Authenticate to Google Cloud (Workload Identity Federation)
         uses: google-github-actions/auth@v2
         with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
+          workload_identity_provider: projects/${{ env.PROJECT_NUM }}/locations/global/workloadIdentityPools/github-pool/providers/github-provider
+          service_account: cineagent-cicd@${{ env.PROJECT_ID }}.iam.gserviceaccount.com
 
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2

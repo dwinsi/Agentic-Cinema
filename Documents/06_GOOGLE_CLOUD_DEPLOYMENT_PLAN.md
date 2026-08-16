@@ -126,21 +126,25 @@ gcloud secrets add-iam-policy-binding cineagent-clickhouse-password \
 
 We provide two production-ready options to automatically build and deploy whenever you push code changes to the `main` branch.
 
-### Option A: GitHub Actions (Recommended)
+### Option A: GitHub Actions with Workload Identity Federation (Configured & Recommended)
 
-A workflow file is pre-configured at `.github/workflows/deploy.yml`.
+GitHub Actions uses **Google Cloud Workload Identity Federation** (keyless OIDC authentication). No long-lived service account keys or secrets are needed.
 
-#### 1. Create a dedicated CI/CD Service Account:
+The workflow is pre-configured at `.github/workflows/deploy.yml`.
+
+#### One-Time GCP Setup (Already Done):
 ```bash
+PROJECT_NUM=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)")
+
+# 1. Create CI/CD Service Account
 gcloud iam service-accounts create cineagent-cicd \
   --display-name="CineAgent GitHub Actions CI/CD" || true
 
-# Grant Artifact Registry Writer
+# 2. Grant Artifact Registry Writer and Cloud Run Admin
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:cineagent-cicd@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/artifactregistry.writer"
 
-# Grant Cloud Run Admin
 gcloud projects add-iam-policy-binding "$PROJECT_ID" \
   --member="serviceAccount:cineagent-cicd@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/run.admin"
@@ -149,25 +153,30 @@ gcloud projects add-iam-policy-binding "$PROJECT_ID" \
 gcloud iam service-accounts add-iam-policy-binding "cineagent-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
   --member="serviceAccount:cineagent-cicd@${PROJECT_ID}.iam.gserviceaccount.com" \
   --role="roles/iam.serviceAccountUser"
+
+# 3. Create Workload Identity Pool and Provider for GitHub Actions
+gcloud iam workload-identity-pools create "github-pool" \
+  --project="${PROJECT_ID}" \
+  --location="global" \
+  --display-name="GitHub Actions Pool" || true
+
+gcloud iam workload-identity-pools providers create-oidc "github-provider" \
+  --project="${PROJECT_ID}" \
+  --location="global" \
+  --workload-identity-pool="github-pool" \
+  --display-name="GitHub Provider" \
+  --issuer-uri="https://token.actions.githubusercontent.com" \
+  --attribute-mapping="google.subject=assertion.sub,attribute.actor=assertion.actor,attribute.repository=assertion.repository" \
+  --attribute-condition="assertion.repository == 'dwinsi/Agentic-Cinema'" || true
+
+# 4. Authorize repository to impersonate cineagent-cicd
+gcloud iam service-accounts add-iam-policy-binding "cineagent-cicd@${PROJECT_ID}.iam.gserviceaccount.com" \
+  --project="${PROJECT_ID}" \
+  --role="roles/iam.workloadIdentityUser" \
+  --member="principalSet://iam.googleapis.com/projects/${PROJECT_NUM}/locations/global/workloadIdentityPools/github-pool/attribute.repository/dwinsi/Agentic-Cinema"
 ```
 
-#### 2. Generate JSON Key and add to GitHub Secrets:
-```bash
-gcloud iam service-accounts keys create /tmp/gcp-sa-key.json \
-  --iam-account="cineagent-cicd@${PROJECT_ID}.iam.gserviceaccount.com"
-
-cat /tmp/gcp-sa-key.json
-# Copy the output and delete the local temp file
-rm /tmp/gcp-sa-key.json
-```
-
-1. Navigate to your GitHub repository: `https://github.com/dwinsi/Agentic-Cinema`
-2. Go to **Settings** -> **Secrets and variables** -> **Actions**.
-3. Click **New repository secret**.
-4. Name: `GCP_SA_KEY`
-5. Value: Paste the JSON content from above.
-
-Now, every `git push origin main` triggers an automatic container build and rollout!
+Now, every `git push origin main` securely mints a short-lived OIDC token directly with Google Cloud and performs an automatic build & deployment.
 
 ---
 
