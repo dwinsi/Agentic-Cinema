@@ -85,11 +85,17 @@ jobs:
           docker push --all-tags "${{ env.IMAGE_NAME }}"
 
       - name: Deploy to Cloud Run
+        id: deploy
         run: |
-          gcloud run deploy ${{ env.SERVICE_NAME }} \
+          SERVICE_URL=$(gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
             --region ${{ env.REGION }} \
             --service-account "cineagent-runtime@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
             --allow-unauthenticated \
             --set-env-vars "GCP_PROJECT_ID=${{ env.PROJECT_ID }},CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true" \
-            --set-secrets "CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:latest"
+            --set-secrets "CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:latest" \
+            --format='value(status.url)')
+          echo "APPLICATION_URL=${SERVICE_URL}" >> $GITHUB_ENV
+          echo "### 🚀 Deployed Application URL: [${SERVICE_URL}](${SERVICE_URL})" >> $GITHUB_STEP_SUMMARY
+          echo "Application is live at: ${SERVICE_URL}"
+
