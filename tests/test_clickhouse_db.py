@@ -46,4 +46,4 @@ def test_save_and_retrieve_project(sample_film_bible, sample_scenes):
     
     retrieved = ch_manager.load_project(project_id)
     assert retrieved is not None
-    assert retrieved.get("title") == sample_film_bible["title"]
+    assert retrieved.get("film_bible", {}).get("title") == sample_film_bible["title"]
