@@ -1,0 +1,51 @@
+name: CI/CD Pipeline - Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  PROJECT_ID: project-2154682a-9280-4a32-a72
+  REGION: us-central1
+  SERVICE_NAME: cineagent-api
+  IMAGE_NAME: us-central1-docker.pkg.dev/project-2154682a-9280-4a32-a72/cloud-run-source-deploy/cineagent-api
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: |
+          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build and Push Container Image
+        run: |
+          docker build \
+            -t "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            -t "${{ env.IMAGE_NAME }}:latest" \
+            .
+          docker push --all-tags "${{ env.IMAGE_NAME }}"
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image "${{ env.IMAGE_NAME }}:${{ github.sha }}" \
+            --region ${{ env.REGION }} \
+            --service-account "cineagent-runtime@${{ env.PROJECT_ID }}.iam.gserviceaccount.com" \
+            --allow-unauthenticated \
+            --set-env-vars "GCP_PROJECT_ID=${{ env.PROJECT_ID }},CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true" \
+            --set-secrets "CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:latest"
