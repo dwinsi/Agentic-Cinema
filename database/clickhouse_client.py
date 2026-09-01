@@ -6,6 +6,7 @@ import time
 from typing import List, Dict, Any, Optional
 from dotenv import load_dotenv
 import clickhouse_connect
+from database.mcp_client import clickhouse_mcp_client, ClickHouseMCPClient
 from observability import get_logger, log_event
 
 # Load environment variables from .env if present
@@ -16,7 +17,8 @@ logger = get_logger("CineAgent.ClickHouse")
 class ClickHouseManager:
     """
     Manages ClickHouse vector storage, scene indexing, and script telemetry.
-    Supports real ClickHouse Cloud / local instances as well as embedded fallback.
+    Supports real ClickHouse Cloud / local instances, official ClickHouse MCP server (`mcp-clickhouse`),
+    as well as embedded fallback.
     """
     def __init__(self):
         self.host = os.getenv("CLICKHOUSE_HOST", None)
@@ -25,6 +27,7 @@ class ClickHouseManager:
         self.port = int(os.getenv("CLICKHOUSE_PORT", "8443"))
         self.secure = os.getenv("CLICKHOUSE_SECURE", "true").lower() == "true"
         self.client = None
+        self.mcp: ClickHouseMCPClient = clickhouse_mcp_client
         self.use_mock = False
 
         self.mock_scenes: List[Dict[str, Any]] = []
@@ -602,12 +605,13 @@ class ClickHouseManager:
         if not self.use_mock and self.client:
             try:
                 count_res = self.client.query("SELECT count() FROM scenes")
-                total_scenes = count_res.result_rows[0][0]
-                avg_res = self.client.query("SELECT avg(tension_score) FROM scenes")
-                avg_tension = round(float(avg_res.result_rows[0][0] or 7.5), 2)
+                total_scenes = count_res.result_rows[0][0] if count_res.result_rows else 0
+                avg_res = self.client.query("SELECT ifNull(avg(tension_score), 7.5) FROM scenes")
+                raw_avg = avg_res.result_rows[0][0] if avg_res.result_rows else 7.5
+                avg_tension = 7.5 if (raw_avg is None or (isinstance(raw_avg, float) and (raw_avg != raw_avg or math.isnan(raw_avg)))) else round(float(raw_avg), 2)
                 
                 rows = self.client.query("SELECT title, tension_score, pacing_tag FROM scenes LIMIT 10").result_rows
-                tension_curve = [{"scene": r[0], "tension": float(r[1]), "pacing": r[2]} for r in rows]
+                tension_curve = [{"scene": r[0], "tension": float(r[1]) if r[1] is not None else 5.0, "pacing": r[2]} for r in rows]
 
                 payload = {
                     "engine": "LIVE ClickHouse Cloud Database",

@@ -28,7 +28,7 @@ It transforms a raw movie premise into a complete, production-ready film Bible:
 ## 🏆 Partner Track & Architecture
 
 - **Google Cloud & Gemini Enterprise**: Built using the official `@google/genai` Python SDK (`from google import genai`) on Vertex AI / Gemini Enterprise with Gemini 2.5 Flash, Cloud Text-to-Speech, and Cloud Logging.
-- **Partner Track**: **ClickHouse Track** ($15,000 Prize Bucket). ClickHouse serves as the vector database, asset vault, and analytics telemetry engine for indexing scene embeddings, dialogue lines, storyboard cards, production designs, and dramatic pacing curves.
+- **Partner Track**: **ClickHouse Track** ($15,000 Prize Bucket). Actively uses ClickHouse at runtime via the official **ClickHouse MCP Server (`mcp-clickhouse`)** and `clickhouse-connect`, serving as the vector database, asset vault, and analytics telemetry engine for indexing scene embeddings, dialogue lines, storyboard cards, production designs, and dramatic pacing curves.
 
 ```
 +-----------------------------------------------------------------------------------+
@@ -79,7 +79,7 @@ It transforms a raw movie premise into a complete, production-ready film Bible:
 ## 🚀 Quickstart Guide
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.13+
 - Google Cloud Project with Vertex AI / Gemini API access
 - ClickHouse (Cloud or Local instance, or fallback to Embedded Engine)
 
@@ -142,16 +142,31 @@ ORDER BY
 LIMIT 50;
 ```
 
-### 4. Run Application Server
+### 4. Run Automated Tests & Diagnostics
+
+CineAgent Studio includes a production-grade test suite with 17 automated unit, integration, and API tests:
+
+```bash
+# Run the complete test suite
+pytest tests/ -v
+
+# Run standalone environment & MCP diagnostics
+python3 scripts/verify_environment.py
+```
+
+### 5. Run Application Server
 ```bash
 source venv/bin/activate
 python3 app.py
 ```
 Open your browser and navigate to: **`http://localhost:8000`**
 
+- **ClickHouse MCP Status**: `GET http://localhost:8000/api/clickhouse/mcp/status`
+- **ClickHouse MCP Query Console**: `POST http://localhost:8000/api/clickhouse/mcp/query`
+
 ---
 
-### 5. Deploy to Cloud Run
+### 6. Deploy to Cloud Run
 
 The repository includes a `Dockerfile` and `.dockerignore` for Cloud Run deployment:
 

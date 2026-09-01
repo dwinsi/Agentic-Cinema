@@ -11,7 +11,7 @@ import json
 
 import uuid
 
-from observability import configure_logging, content_metadata, get_logger, log_event, request_id_ctx
+from observability import configure_logging, content_metadata, get_logger, log_event, request_id_ctx, sanitize_for_json
 configure_logging()
 
 from agents.film_crew import film_crew
@@ -824,13 +824,63 @@ async def get_analytics():
     """Fetches real-time script pacing and ClickHouse engine telemetry."""
     try:
         data = ch_manager.get_telemetry_analytics()
-        return JSONResponse({
+        return JSONResponse(sanitize_for_json({
             "status": "success",
             "telemetry": data
-        })
+        }))
     except Exception:
         logger.exception("Analytics endpoint failed")
         raise HTTPException(status_code=500, detail="Analytics endpoint failed")
+
+
+@app.get("/api/clickhouse/mcp/status")
+async def get_clickhouse_mcp_status():
+    """Returns runtime status and tool schema of the official ClickHouse MCP server (`mcp-clickhouse`)."""
+    try:
+        tables = ch_manager.mcp.list_tables()
+        databases = ch_manager.mcp.list_databases()
+        summary = ch_manager.mcp.get_film_telemetry_summary()
+        return JSONResponse(sanitize_for_json({
+            "status": "success",
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse",
+            "is_available": ch_manager.mcp.is_available,
+            "host": ch_manager.mcp.host,
+            "database": ch_manager.mcp.database,
+            "tools": ["run_query", "list_tables", "list_databases", "vector_search_scenes"],
+            "indexed_tables": tables,
+            "databases": databases,
+            "telemetry_summary": summary
+        }))
+    except Exception as e:
+        logger.exception("MCP status endpoint failed")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e),
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse"
+        }, status_code=500)
+
+
+class MCPQueryRequest(BaseModel):
+    query: str
+
+
+@app.post("/api/clickhouse/mcp/query")
+async def execute_clickhouse_mcp_query(payload: MCPQueryRequest):
+    """Executes a SQL query via the official ClickHouse MCP server `run_query` tool."""
+    try:
+        res = ch_manager.mcp.run_query(payload.query)
+        return JSONResponse({
+            "status": "success",
+            "mcp_server": "io.github.ClickHouse/mcp-clickhouse",
+            "response": res
+        })
+    except Exception as e:
+        logger.exception(f"MCP query endpoint failed: {e}")
+        return JSONResponse({
+            "status": "error",
+            "error": str(e)
+        }, status_code=500)
+
 
 if __name__ == "__main__":
     import uvicorn

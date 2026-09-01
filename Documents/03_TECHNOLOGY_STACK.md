@@ -8,7 +8,7 @@ This document outlines the software libraries, frameworks, APIs, and database te
 
 | Layer | Technology / Package | Version / Tool | Purpose in CineAgent Studio |
 | :--- | :--- | :--- | :--- |
-| **Language** | Python | `3.10+` | Core server logic, agent workflows, data orchestration |
+| **Language** | Python | `3.13+` | Core server logic, agent workflows, data orchestration |
 | **Web Framework** | FastAPI | `0.110+` | Asynchronous REST API routing, SSE streaming (`StreamingResponse`), OpenAPI docs |
 | **ASGI Server** | Uvicorn | `0.28+` | High-performance asynchronous HTTP server with auto-reload |
 | **Data Validation** | Pydantic | `v2.6+` | Request/response payload schemas and strict validation |
@@ -19,7 +19,10 @@ This document outlines the software libraries, frameworks, APIs, and database te
 | **Speech AI** | Google Cloud TTS | `google-cloud-texttospeech` | Studio-grade Neural2 & Journey synthetic voice actor synthesis |
 | **Observability** | Google Cloud Logging | `google-cloud-logging` | Direct background thread log shipping to Cloud Logging & BigQuery Log Analytics |
 | **Database** | ClickHouse Cloud | ReplacingMergeTree | Columnar vector database & real-time telemetry analytics across 8 tables |
-| **Database Client**| `clickhouse-connect` | `0.7.0+` | Official Python HTTP/TCP driver for ClickHouse |
+| **Database Driver**| `clickhouse-connect` | `0.7.0+` | Official Python HTTP/TCP driver for ClickHouse |
+| **MCP Server** | `mcp-clickhouse` | `0.4.1+` | Official ClickHouse Model Context Protocol server (`io.github.ClickHouse/mcp-clickhouse`) |
+| **MCP Protocol** | `mcp` | `1.26.0+` | Model Context Protocol Python client & runtime interface |
+| **Test Suite** | `pytest` & `httpx` | `pytest>=8.0` | Comprehensive 17-test automated test suite for CI/CD pipelines |
 | **Environment** | `python-dotenv` | `1.0.1+` | Environment configuration management (`.env`) |
 | **Frontend UI** | HTML5 / CSS3 / Vanilla JS | Modern ES6+ | Real-time SSE streaming consumer and cinematic dark-mode interface |
 | **Data Viz** | Chart.js | `4.x` CDN | Interactive script dramatic tension line charts & pacing curves |

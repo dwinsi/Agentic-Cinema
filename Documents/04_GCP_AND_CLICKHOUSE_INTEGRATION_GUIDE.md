@@ -71,21 +71,23 @@ CLICKHOUSE_USER="default"
 CLICKHOUSE_PASSWORD="your-secure-password"
 CLICKHOUSE_PORT="8443"
 CLICKHOUSE_SECURE=true
+CLICKHOUSE_ALLOW_WRITE_ACCESS=true
 ```
 
 ---
 
-## 4. Python SDK Integration & Schema Setup
+## 4. Python SDK & Official ClickHouse MCP Integration
 
-### A. Initializing Clients
+### A. Initializing Clients (Vertex AI, ClickHouse & Official MCP Server)
 ```python
 from google import genai
 import clickhouse_connect
+from database.mcp_client import clickhouse_mcp_client
 
-# 1. Google GenAI Client
+# 1. Google GenAI Client (Vertex AI)
 genai_client = genai.Client(vertexai=True, project="your-project-id", location="us-central1")
 
-# 2. ClickHouse Client
+# 2. ClickHouse Driver Client
 ch_client = clickhouse_connect.get_client(
     host="your-cluster.clickhouse.cloud",
     port=8443,
@@ -93,6 +95,11 @@ ch_client = clickhouse_connect.get_client(
     password="your-password",
     secure=True
 )
+
+# 3. Official ClickHouse MCP Server Client (`mcp-clickhouse`)
+# Automatically connects via standard MCP tools: run_query, list_tables, list_databases
+mcp_tables = clickhouse_mcp_client.list_tables()
+mcp_query_res = clickhouse_mcp_client.run_query("SELECT count() FROM scenes")
 ```
 
 ### B. The 8 Normalized Tables in ClickHouse Cloud

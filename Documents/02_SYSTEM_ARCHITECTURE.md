@@ -20,6 +20,7 @@ flowchart TD
     subgraph Layer1["1. Application & API Layer (FastAPI app.py)"]
         direction TB
         API_STREAM["POST /api/generate-film-project-stream<br/>(SSE Event Stream: Film Bible ➔ Script ➔ Parallel Depts)"]:::apiStyle
+        API_MCP["GET /api/clickhouse/mcp/status & POST /api/clickhouse/mcp/query<br/>(Official ClickHouse MCP Server Protocol)"]:::apiStyle
         API_REV["POST /api/revise-scene<br/>(Director's Cut Scene Rewriting)"]:::apiStyle
         API_VOICE["POST /api/tts & GET /api/voice-vault<br/>(Voice Synthesis & Casting Library)"]:::apiStyle
         API_IMG["POST /api/generate-image<br/>(16:9 Concept Frame Rendering)"]:::apiStyle
@@ -35,7 +36,8 @@ flowchart TD
             SD["Storyboard Director<br/>(Shot Framing & Prompts)"]:::agentStyle
             PD["Production Designer<br/>(Sets, Props & Wardrobe)"]:::agentStyle
             AU["Audio Department<br/>(Score, Foley & Audio Cues)"]:::agentStyle
-            MA["Market Analyst<br/>(Pacing & Box Office)"]:::agentStyle
+            MA["Market Analyst<br/>(Pacing, Box Office & MCP Telemetry)"]:::agentStyle
+            CS["Continuity Supervisor<br/>(MCP Vector Search & Consistency)"]:::agentStyle
         end
 
         Gemini["Google Vertex AI: Gemini Enterprise (gemini-2.5-flash)"]:::gcpStyle
@@ -46,12 +48,14 @@ flowchart TD
         Stage3 -.-> Gemini
     end
 
-    subgraph Layer3["3. Database & Storage Layer (database/clickhouse_client.py)"]
+    subgraph Layer3["3. Database & MCP Bridge Layer (database/mcp_client.py & clickhouse_client.py)"]
         direction TB
+        MCPBridge["Official ClickHouse MCP Server (mcp-clickhouse)<br/>(run_query, list_tables, list_databases)"]:::dbStyle
         ClientLib["clickhouse-connect Driver"]:::dbStyle
         LiveCloud["Live ClickHouse Cloud Cluster"]:::liveStyle
         Tables[("8 ClickHouse Cloud Tables:<br/>projects, scenes (768d vectors), dialogues,<br/>storyboards, production_design, audio_post,<br/>generated_images, actor_voice_vault")]:::dbStyle
 
+        MCPBridge --> LiveCloud
         ClientLib --> LiveCloud --> Tables
     end
 
