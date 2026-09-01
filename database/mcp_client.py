@@ -93,8 +93,12 @@ class ClickHouseMCPClient:
                     data = json.loads(raw_res)
                     if isinstance(data, list):
                         return [t.get("name", str(t)) if isinstance(t, dict) else str(t) for t in data]
+                    elif isinstance(data, dict) and "tables" in data:
+                        return [t.get("name", str(t)) if isinstance(t, dict) else str(t) for t in data["tables"]]
                 except Exception:
                     pass
+            elif isinstance(raw_res, dict) and "tables" in raw_res:
+                return [t.get("name", str(t)) if isinstance(t, dict) else str(t) for t in raw_res["tables"]]
             log_event(logger, "mcp_tool_exec_completed", tool="list_tables", success=True)
             return [raw_res] if isinstance(raw_res, str) else raw_res
         except Exception as e:
@@ -150,9 +154,9 @@ class ClickHouseMCPClient:
         sql = f"""
         SELECT 
             count() as total_scenes,
-            avg(tension_score) as avg_tension,
-            min(tension_score) as min_tension,
-            max(tension_score) as max_tension
+            ifNull(avg(tension_score), 0.0) as avg_tension,
+            ifNull(min(tension_score), 0.0) as min_tension,
+            ifNull(max(tension_score), 0.0) as max_tension
         FROM scenes
         {where_clause}
         """

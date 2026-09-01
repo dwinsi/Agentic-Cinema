@@ -11,7 +11,7 @@ import json
 
 import uuid
 
-from observability import configure_logging, content_metadata, get_logger, log_event, request_id_ctx
+from observability import configure_logging, content_metadata, get_logger, log_event, request_id_ctx, sanitize_for_json
 configure_logging()
 
 from agents.film_crew import film_crew
@@ -824,10 +824,10 @@ async def get_analytics():
     """Fetches real-time script pacing and ClickHouse engine telemetry."""
     try:
         data = ch_manager.get_telemetry_analytics()
-        return JSONResponse({
+        return JSONResponse(sanitize_for_json({
             "status": "success",
             "telemetry": data
-        })
+        }))
     except Exception:
         logger.exception("Analytics endpoint failed")
         raise HTTPException(status_code=500, detail="Analytics endpoint failed")
@@ -840,7 +840,7 @@ async def get_clickhouse_mcp_status():
         tables = ch_manager.mcp.list_tables()
         databases = ch_manager.mcp.list_databases()
         summary = ch_manager.mcp.get_film_telemetry_summary()
-        return JSONResponse({
+        return JSONResponse(sanitize_for_json({
             "status": "success",
             "mcp_server": "io.github.ClickHouse/mcp-clickhouse",
             "is_available": ch_manager.mcp.is_available,
@@ -850,7 +850,7 @@ async def get_clickhouse_mcp_status():
             "indexed_tables": tables,
             "databases": databases,
             "telemetry_summary": summary
-        })
+        }))
     except Exception as e:
         logger.exception("MCP status endpoint failed")
         return JSONResponse({

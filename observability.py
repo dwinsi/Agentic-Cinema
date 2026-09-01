@@ -121,3 +121,21 @@ def content_metadata(content: Optional[str], field_name: str) -> Dict[str, Any]:
         metadata[field_name] = value[:_CONTENT_LIMIT]
         metadata[f"{field_name}_truncated"] = len(value) > _CONTENT_LIMIT
     return metadata
+
+
+def sanitize_for_json(obj: Any) -> Any:
+    """Recursively converts NaN and Infinity floats to 0.0 or None to guarantee JSON compliance."""
+    import math
+    if isinstance(obj, float):
+        if math.isnan(obj) or math.isinf(obj):
+            return 0.0
+        return obj
+    elif isinstance(obj, dict):
+        return {k: sanitize_for_json(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [sanitize_for_json(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return [sanitize_for_json(v) for v in obj]
+    return obj
+
+

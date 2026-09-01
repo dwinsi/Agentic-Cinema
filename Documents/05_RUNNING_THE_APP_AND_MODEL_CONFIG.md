@@ -73,7 +73,7 @@ GCP_PROJECT_ID=project-2154682a-9280-4a32-a72
 GEMINI_MODEL_NAME=gemini-2.5-flash
 
 # --- ClickHouse Cloud Vector Database & Official MCP Settings ---
-CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud
+CLICKHOUSE_HOST=fjtkh2sjx9.asia-northeast1.gcp.clickhouse.cloud
 CLICKHOUSE_USER=default
 CLICKHOUSE_PASSWORD=your_password
 CLICKHOUSE_PORT=8443

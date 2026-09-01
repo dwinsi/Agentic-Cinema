@@ -210,7 +210,7 @@ gcloud run deploy cineagent-api \
   --region "$REGION" \
   --service-account "cineagent-runtime@${PROJECT_ID}.iam.gserviceaccount.com" \
   --allow-unauthenticated \
-  --set-env-vars GCP_PROJECT_ID="$PROJECT_ID",CLICKHOUSE_HOST=eobvth7u0q.asia-southeast1.gcp.clickhouse.cloud,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true \
+  --set-env-vars GCP_PROJECT_ID="$PROJECT_ID",CLICKHOUSE_HOST=fjtkh2sjx9.asia-northeast1.gcp.clickhouse.cloud,CLICKHOUSE_USER=default,CLICKHOUSE_PORT=8443,CLICKHOUSE_SECURE=true \
   --set-secrets CLICKHOUSE_PASSWORD=cineagent-clickhouse-password:latest
 ```
 
