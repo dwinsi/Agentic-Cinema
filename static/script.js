@@ -484,6 +484,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 crewActiveCount.textContent = event.message;
             }
         } else if (event.type === "film_bible") {
+            setAgentStatus("agent-script-analyst", "done");
             setAgentStatus("agent-producer", "done");
             currentProject.film_bible = event.data;
             renderFilmBible(event.data, currentProject.grounded);
@@ -965,6 +966,22 @@ document.addEventListener("DOMContentLoaded", () => {
             updateCharCount();
         }
 
+        if (pb.genre && genreInput) {
+            const match = Array.from(genreInput.options).find(o =>
+                pb.genre.toLowerCase().includes(o.value.toLowerCase()) ||
+                o.value.toLowerCase().includes(pb.genre.toLowerCase())
+            );
+            if (match) genreInput.value = match.value;
+        }
+
+        if (pb.tone && toneInput) {
+            const match = Array.from(toneInput.options).find(o =>
+                pb.tone.toLowerCase().includes(o.value.toLowerCase()) ||
+                o.value.toLowerCase().includes(pb.tone.toLowerCase())
+            );
+            if (match) toneInput.value = match.value;
+        }
+
         document.getElementById("clear-script-btn")?.addEventListener("click", () => {
             currentDocId = "";
             parsedPreview.classList.add("hidden");
@@ -978,8 +995,10 @@ document.addEventListener("DOMContentLoaded", () => {
     async function processUploadedFile(file) {
         if (!file) return;
         const allowed = ["application/pdf", "text/plain"];
-        if (!allowed.includes(file.type)) {
-            setUploadStatus("error", `Unsupported format: ${file.type}. Please use PDF or TXT.`);
+        const fileName = (file.name || "").toLowerCase();
+        const isAllowed = allowed.includes(file.type) || fileName.endsWith(".txt") || fileName.endsWith(".pdf");
+        if (!isAllowed) {
+            setUploadStatus("error", `Unsupported format: ${file.type || "unknown"}. Please use PDF or TXT.`);
             return;
         }
         if (file.size > 20 * 1024 * 1024) {
