@@ -687,24 +687,26 @@ class ClickHouseManager:
                   latency_ms=round((time.perf_counter() - started) * 1000, 2))
 
     def search_script_documents(self, query_embedding: List[float],
-                                 top_k: int = 5) -> List[Dict[str, Any]]:
+                                 top_k: int = 5,
+                                 doc_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Return top-k script chunks most similar to query_embedding.
         Uses cosine similarity via ClickHouse or in-memory fallback.
+        Optionally filters by doc_id to isolate an uploaded screenplay.
         """
         started = time.perf_counter()
         dim = len(query_embedding)
 
         if not self.use_mock and self.client:
             try:
-                # ClickHouse cosine similarity: using L2Distance as proxy
-                # (full cosineDistance is available in newer CH versions)
+                # ClickHouse cosine similarity
+                doc_filter = f"AND doc_id = '{doc_id}'" if doc_id else ""
                 result = self.client.query(
                     f"""
                     SELECT doc_id, title, chunk_index, chunk_text,
                            cosineDistance(embedding, {query_embedding!r}) AS dist
                     FROM script_documents
-                    WHERE length(embedding) = {dim}
+                    WHERE length(embedding) = {dim} {doc_filter}
                     ORDER BY dist ASC
                     LIMIT {top_k}
                     """
@@ -718,7 +720,7 @@ class ClickHouseManager:
                     for r in result.result_rows
                 ]
                 log_event(logger, "script_document_search_completed", engine="live",
-                          result_count=len(rows),
+                          doc_id=doc_id, result_count=len(rows),
                           latency_ms=round((time.perf_counter() - started) * 1000, 2))
                 return rows
             except Exception:
@@ -733,17 +735,41 @@ class ClickHouseManager:
             n2 = math.sqrt(sum(b * b for b in v2)) + 1e-9
             return dot / (n1 * n2)
 
+        candidates = [
+            doc for doc in self.mock_script_documents
+            if len(doc.get("embedding", [])) == dim and (not doc_id or doc.get("doc_id") == doc_id)
+        ]
         scored = [
             {**doc, "similarity": round(cosine_sim(query_embedding, doc["embedding"]), 4)}
-            for doc in self.mock_script_documents
-            if len(doc.get("embedding", [])) == dim
+            for doc in candidates
         ]
         scored.sort(key=lambda x: x["similarity"], reverse=True)
         results = scored[:top_k]
         log_event(logger, "script_document_search_completed", engine="embedded",
-                  result_count=len(results),
+                  doc_id=doc_id, result_count=len(results),
                   latency_ms=round((time.perf_counter() - started) * 1000, 2))
         return results
+
+    def get_script_chunks(self, doc_id: str, limit: int = 10) -> List[str]:
+        """
+        Fetch raw chunk texts for a given doc_id ordered by chunk_index.
+        Used as a guaranteed fallback when vector search is unavailable.
+        """
+        if not self.use_mock and self.client:
+            try:
+                res = self.client.query(
+                    "SELECT chunk_text FROM script_documents "
+                    "WHERE doc_id = %(doc_id)s ORDER BY chunk_index ASC LIMIT %(limit)s",
+                    parameters={"doc_id": doc_id, "limit": limit}
+                )
+                return [r[0] for r in res.result_rows if r[0]]
+            except Exception:
+                logger.exception("Failed to get script chunks from ClickHouse")
+
+        return [
+            d["chunk_text"] for d in self.mock_script_documents
+            if d.get("doc_id") == doc_id and d.get("chunk_text")
+        ][:limit]
 
     # ──────────────────────────────────────────────────────────────
     # Uploaded Scripts Registry

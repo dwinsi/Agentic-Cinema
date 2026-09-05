@@ -94,6 +94,55 @@ async def get_index():
             return f.read()
     return "<h1>CineAgent Studio API Server Running</h1><p>Static index.html not found.</p>"
 
+def _build_rag_script_context(doc_id: str, premise: str) -> tuple[str, int]:
+    """
+    Retrieve screenplay canon and matching vector chunks from ClickHouse Cloud
+    (with Vertex AI Search fallback). Returns (script_context, passage_count).
+    """
+    if not doc_id:
+        return "", 0
+
+    script_meta = ch_manager.get_uploaded_script(doc_id)
+    passages = []
+
+    # 1. Semantic vector search in ClickHouse
+    try:
+        search_query = premise or (script_meta.get("logline", "") if script_meta else "screenplay")
+        query_emb = script_processor.embed_text(search_query)
+        ch_results = ch_manager.search_script_documents(query_emb, top_k=4, doc_id=doc_id)
+        passages = [r["chunk_text"] for r in ch_results if r.get("chunk_text")]
+    except Exception:
+        logger.warning("ClickHouse vector search failed during RAG grounding", exc_info=True)
+
+    # 2. Sequential chunks fallback from ClickHouse
+    if not passages:
+        passages = ch_manager.get_script_chunks(doc_id, limit=5)
+
+    # 3. Vertex AI Search fallback
+    if not passages:
+        passages = script_processor.retrieve_from_vertex_search(premise, top_k=3)
+
+    context_parts = []
+    if script_meta:
+        context_parts.append(f"ORIGINAL SCREENPLAY TITLE: {script_meta.get('title', 'Untitled')}")
+        if script_meta.get("logline"):
+            context_parts.append(f"ORIGINAL LOGLINE: {script_meta['logline']}")
+        if script_meta.get("characters"):
+            chars_desc = "\n".join([
+                f"- {c.get('name')}: {c.get('role', 'Character')} ({c.get('archetype_description', '')})"
+                for c in script_meta["characters"]
+            ])
+            context_parts.append(f"CANON CHARACTERS (MUST BE INCLUDED):\n{chars_desc}")
+        if script_meta.get("themes"):
+            context_parts.append(f"CORE THEMES: {', '.join(script_meta['themes'])}")
+
+    if passages:
+        context_parts.append("RELEVANT SCREENPLAY SCENES & DIALOGUE:\n" + "\n---\n".join(passages))
+
+    script_context = "\n\n".join(context_parts)
+    return script_context, len(passages)
+
+
 @app.post("/api/generate-film-project")
 async def generate_film_project(req: FilmConceptRequest):
     """
@@ -108,14 +157,13 @@ async def generate_film_project(req: FilmConceptRequest):
         log_event(logger, "film_project_requested", genre=req.genre, tone=req.tone,
                   doc_id=req.doc_id or None, **content_metadata(req.premise, "premise"))
 
-        # Step 0 (optional): Retrieve grounding passages from Vertex AI Search
+        # Step 0 (optional): Retrieve grounding canon & passages from ClickHouse RAG
         script_context = ""
         if req.doc_id:
-            passages = script_processor.retrieve_from_vertex_search(req.premise, top_k=3)
-            if passages:
-                script_context = "\n\n".join(passages)
+            script_context, passage_count = _build_rag_script_context(req.doc_id, req.premise)
+            if script_context:
                 log_event(logger, "rag_grounding_applied", doc_id=req.doc_id,
-                          passage_count=len(passages))
+                          passage_count=passage_count)
 
         # Step 1: Run Executive Producer Agent (with optional script grounding)
         film_bible = film_crew.run_executive_producer(
@@ -232,14 +280,13 @@ async def generate_film_project_stream(req: FilmConceptRequest):
             log_event(logger, "film_project_stream_requested", genre=req.genre, tone=req.tone,
                       doc_id=req.doc_id or None, **content_metadata(req.premise, "premise"))
 
-            # Step 0: RAG Grounding
+            # Step 0: RAG Grounding via ClickHouse Vector Store
             script_context = ""
             if req.doc_id:
-                yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'rag', 'message': 'Retrieving screenplay canon from Vertex AI Search...'})}\n\n"
-                passages = script_processor.retrieve_from_vertex_search(req.premise, top_k=3)
-                if passages:
-                    script_context = "\n\n".join(passages)
-                    log_event(logger, "rag_grounding_applied", doc_id=req.doc_id, passage_count=len(passages))
+                yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'rag', 'message': 'Retrieving screenplay canon from ClickHouse Vector Vault...'})}\n\n"
+                script_context, passage_count = await asyncio.to_thread(_build_rag_script_context, req.doc_id, req.premise)
+                if script_context:
+                    log_event(logger, "rag_grounding_applied", doc_id=req.doc_id, passage_count=passage_count)
 
             # Step 1: Executive Producer / Showrunner Agent
             yield f"data: {json.dumps({'type': 'agent_start', 'agent': 'showrunner', 'message': 'Showrunner conceiving Film Bible & World Rules...'})}\n\n"
@@ -397,10 +444,16 @@ async def upload_script(file: UploadFile = File(...)):
 
     content_type = file.content_type or "application/octet-stream"
     if content_type not in ALLOWED_MIME:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Unsupported file type: {content_type}. Upload PDF or plain-text files."
-        )
+        filename_lower = (file.filename or "").lower()
+        if filename_lower.endswith(".txt"):
+            content_type = "text/plain"
+        elif filename_lower.endswith(".pdf"):
+            content_type = "application/pdf"
+        else:
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file type: {content_type}. Upload PDF or plain-text files."
+            )
 
     try:
         file_bytes = await file.read()
@@ -414,7 +467,12 @@ async def upload_script(file: UploadFile = File(...)):
         # 1. Parse with Gemini
         parsed = script_processor.parse_script(file_bytes, content_type, file.filename or "script")
         doc_id = parsed["doc_id"]
-        raw_text = parsed.get("raw_text_excerpt", "")
+        
+        # For plain text files, use the full decoded content for comprehensive chunking
+        if content_type == "text/plain":
+            raw_text = file_bytes.decode("utf-8", errors="replace")
+        else:
+            raw_text = parsed.get("raw_text_excerpt", "")
 
         # 2. Chunk & embed → ClickHouse
         chunks = script_processor.chunk_script(raw_text) if raw_text else []
