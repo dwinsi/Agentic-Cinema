@@ -3,9 +3,16 @@
 > **Autonomous Multi-Agent AI Film Crew powered by Gemini Enterprise, Google Cloud Log Analytics & ClickHouse Vector Engine.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Watch Demo Video](https://img.shields.io/badge/YouTube-Watch%20Demo%20Video-FF0000?logo=youtube&logoColor=white)](https://youtu.be/egxVkgL63qk)
 [![Google Cloud](https://img.shields.io/badge/Google%20Cloud-Gemini%20Enterprise-4285F4)](https://cloud.google.com/vertex-ai)
 [![ClickHouse](https://img.shields.io/badge/ClickHouse-Vector%20Search%20%26%20Telemetry-FFCC00)](https://clickhouse.com/)
 [![Log Analytics](https://img.shields.io/badge/GCP-Cloud%20Log%20Analytics-34A853)](https://cloud.google.com/logging)
+
+---
+
+## 📺 Video Demonstration
+
+Watch our 3-minute video walkthrough on YouTube: **[https://youtu.be/egxVkgL63qk](https://youtu.be/egxVkgL63qk)**
 
 ---
 
